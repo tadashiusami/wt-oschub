@@ -1,0 +1,13 @@
+{
+  "name": "wt-oschub-bridge",
+  "version": "1.0.0",
+  "description": "Local UDP-WebSocket bridge for WebTransport OSC Hub",
+  "main": "bridge.js",
+  "scripts": {
+    "start": "node bridge.js"
+  },
+  "dependencies": {
+    "ws": "^8.0.0"
+  },
+  "license": "GPL-3.0"
+}
