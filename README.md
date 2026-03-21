@@ -36,7 +36,11 @@ A low-latency, bidirectional OSC relay system for SuperCollider using WebTranspo
 │   └── wt_oschub.py       # Hub relay server
 ├── bridge-local/
 │   └── bridge.js          # Local UDP-WebSocket bridge
-└── index.html             # Web client (host on HTTPS server)
+├── client-web/
+│   └── index.html         # Web client interface (HTML/JS)
+├── .gitignore             # Git ignore settings
+├── LICENSE                # GNU GPL v3 License
+└── README.md              # Project documentation
 ```
 
 ## Setup & Execution
