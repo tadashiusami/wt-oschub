@@ -67,6 +67,8 @@
         let wsBridge;   // Local WebSocket Bridge (bridge.js)
         let myClientId = null;
         const osc = new OSC();
+        let reconnectDelay = 1000;
+        const MAX_RECONNECT_DELAY = 30000;
 
         function addLog(msg, isOsc = false) {
             const log = document.getElementById('log');
@@ -147,9 +149,9 @@
         }
 
         // --- 2. WebTransport (Remote Hub) Connection ---
-        async function connectHub() {
-            const idInput = document.getElementById('sessionId');
-            const sid = idInput.value.trim();
+        // Returns: 'connected' | 'rejected' (409) | 'failed' (network error)
+        async function connectHub(opts = {}) {
+            const sid = document.getElementById('sessionId').value.trim();
 
             // Automatically use the hostname of the server serving this page.
             // If the Web server and Hub server are on different machines,
@@ -162,7 +164,7 @@
                 addLog("<span style='color: #ff4444;'>Error: Session ID is required.</span>");
                 alert("Please enter a Session ID.");
                 document.getElementById('connectBtn').disabled = false;
-                return false;
+                return 'failed';
             }
 
             const nameParam = nameInput ? `&name=${encodeURIComponent(nameInput)}` : '';
@@ -179,16 +181,55 @@
                 // Initialize Listeners
                 receiveDatagrams();
                 receiveStreams();
-                return true;
+                return 'connected';
             } catch (e) {
                 const msg = e.message || String(e);
                 if (msg.includes('409') || msg.includes('conflict')) {
                     addLog(`<span style='color:#ff4444;'>Hub rejected: name already in use in this session.</span>`);
+                    document.getElementById('connectBtn').disabled = false;
+                    return 'rejected';
                 } else {
-                    addLog(`Hub Connection Failed: ${msg}`);
+                    addLog(`Hub connection failed: ${msg}`);
+                    if (!opts.fromReconnect) {
+                        document.getElementById('connectBtn').disabled = false;
+                    }
+                    return 'failed';
                 }
-                document.getElementById('connectBtn').disabled = false;
-                return false;
+            }
+        }
+
+        // --- 2a. Reconnection logic ---
+        function watchHubConnection() {
+            transport.closed
+                .then(() => handleHubDisconnect())
+                .catch(() => handleHubDisconnect());
+        }
+
+        function handleHubDisconnect() {
+            document.getElementById('wt-status').textContent = "Disconnected";
+            document.getElementById('wt-status').className = "inactive";
+            document.getElementById('connectBtn').disabled = false;
+            scheduleReconnect();
+        }
+
+        async function scheduleReconnect() {
+            addLog(`Hub disconnected. Reconnecting in ${reconnectDelay / 1000}s...`);
+            await new Promise(r => setTimeout(r, reconnectDelay));
+            reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
+
+            // User manually clicked Connect while waiting — let that take over
+            if (document.getElementById('connectBtn').disabled) return;
+
+            document.getElementById('connectBtn').disabled = true;
+            const result = await connectHub({ fromReconnect: true });
+            if (result === 'connected') {
+                reconnectDelay = 1000;
+                watchHubConnection();
+            } else if (result === 'rejected') {
+                // Name conflict — don't retry
+            } else {
+                // Network failure — retry with longer delay
+                scheduleReconnect();
             }
         }
 
@@ -290,12 +331,14 @@
 
         // --- 4. Controller ---
         async function connectAll() {
+            reconnectDelay = 1000;  // reset backoff on manual connect
             document.getElementById('connectBtn').disabled = true;
-            
-            const hubSuccess = await connectHub();
-            if (hubSuccess) {
+            const result = await connectHub();
+            if (result === 'connected') {
+                watchHubConnection();
                 connectLocalBridge();
             }
+            // On 'rejected' or 'failed': connectHub already re-enabled the button
         }
     </script>
 </body>
