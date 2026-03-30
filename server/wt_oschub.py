@@ -68,6 +68,7 @@ def rewrite_osc_address(data: bytes, client_id: str, original_address: str) -> b
 
     The original address portion (padded to 4-byte boundary) is replaced with
     the new address. All arguments following the address are preserved as-is.
+    OSC bundles are handled by rewrite_bundle.
     """
     try:
         # Calculate the padded length of the original address
@@ -82,6 +83,35 @@ def rewrite_osc_address(data: bytes, client_id: str, original_address: str) -> b
         return new_address_bytes + data[orig_padded:]
     except Exception:
         return data
+
+
+def rewrite_bundle(data: bytes, client_id: str) -> bytes:
+    """Recursively rewrite OSC addresses within an OSC bundle.
+
+    Preserves the bundle header (including timetag) and rewrites each
+    contained OSC message address. Nested bundles are handled recursively.
+    Returns the original data unchanged on any parse error.
+    """
+    if len(data) < 16:
+        return data
+    # '#bundle\0' (8 bytes) + timetag (8 bytes)
+    header = data[:16]
+    pos = 16
+    result = header
+    while pos + 4 <= len(data):
+        size = struct.unpack('>I', data[pos:pos + 4])[0]
+        pos += 4
+        if pos + size > len(data):
+            break
+        elem = data[pos:pos + size]
+        pos += size
+        if elem[:7] == b'#bundle':
+            rewritten_elem = rewrite_bundle(elem, client_id)
+        else:
+            orig_addr = parse_osc_address(elem)
+            rewritten_elem = rewrite_osc_address(elem, client_id, orig_addr)
+        result += struct.pack('>I', len(rewritten_elem)) + rewritten_elem
+    return result
 
 class OSCHubProtocol(QuicConnectionProtocol):
     # {session_id: {client_id: protocol}}
@@ -178,8 +208,11 @@ class OSCHubProtocol(QuicConnectionProtocol):
             return
 
         # Rewrite OSC address once for all recipients
-        original_address = parse_osc_address(data)
-        rewritten = rewrite_osc_address(data, self.client_id, original_address)
+        if data[:7] == b'#bundle':
+            rewritten = rewrite_bundle(data, self.client_id)
+        else:
+            original_address = parse_osc_address(data)
+            rewritten = rewrite_osc_address(data, self.client_id, original_address)
 
         clients = self.sessions.get(self.session_id, {})
 

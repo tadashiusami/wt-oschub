@@ -18,22 +18,25 @@ const udp = dgram.createSocket('udp4');
 
 // 2. Initialize WebSocket Server for browser communication
 const wss = new WebSocket.Server({ port: WS_PORT });
-let browserClient = null;
+const browserClients = new Set();
 
 /**
  * [A] Relay: SuperCollider -> Browser
- * Listens for OSC messages from SC and forwards them to the browser via WebSocket.
+ * Listens for OSC messages from SC and forwards them to all connected browsers.
  */
 udp.on('message', (msg, rinfo) => {
     console.log(`[UDP IN] From SC: ${msg.length} bytes`);
 
-    // Forward the binary message (Buffer) to the connected browser client
-    if (browserClient && browserClient.readyState === WebSocket.OPEN) {
-        browserClient.send(msg);
-        console.log(' -> Relayed to WebTransport (via index.html)');
-    } else {
-        console.log(' !! Relay failed: Browser not connected via WebSocket');
+    if (browserClients.size === 0) {
+        console.log(' !! Relay failed: No browser connected via WebSocket');
+        return;
     }
+    for (const client of browserClients) {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(msg);
+        }
+    }
+    console.log(` -> Relayed to ${browserClients.size} browser(s)`);
 });
 
 /**
@@ -41,8 +44,8 @@ udp.on('message', (msg, rinfo) => {
  * Receives OSC messages from the browser and forwards them to SC via UDP.
  */
 wss.on('connection', (ws) => {
-    console.log('--- [JOIN] Browser connected to Bridge ---');
-    browserClient = ws;
+    console.log(`--- [JOIN] Browser connected to Bridge (total: ${browserClients.size + 1}) ---`);
+    browserClients.add(ws);
 
     ws.on('message', (data) => {
         // 'data' contains the binary OSC packet received via WebTransport
@@ -59,12 +62,13 @@ wss.on('connection', (ws) => {
     });
 
     ws.on('close', () => {
-        console.log('--- [LEAVE] Browser disconnected ---');
-        browserClient = null;
+        browserClients.delete(ws);
+        console.log(`--- [LEAVE] Browser disconnected (total: ${browserClients.size}) ---`);
     });
 
     ws.on('error', (err) => {
         console.error('WebSocket Error:', err);
+        browserClients.delete(ws);
     });
 });
 
