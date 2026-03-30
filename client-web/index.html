@@ -65,10 +65,20 @@
 
         let transport;  // WebTransport instance
         let wsBridge;   // Local WebSocket Bridge (bridge.js)
+        let datagramWriter = null;  // Persistent datagram writer
         let myClientId = null;
         const osc = new OSC();
         let reconnectDelay = 1000;
         const MAX_RECONNECT_DELAY = 30000;
+
+        function escapeHtml(str) {
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
 
         function addLog(msg, isOsc = false) {
             const log = document.getElementById('log');
@@ -117,12 +127,10 @@
                         const writer = stream.getWriter();
                         await writer.write(data);
                         await writer.close();
-                        addLog(`[Stream] Sent: ${path} (${data.length} bytes)`, true);
+                        addLog(`[Stream] Sent: ${escapeHtml(path)} (${data.length} bytes)`, true);
                     } else {
-                        const writer = transport.datagrams.writable.getWriter();
-                        await writer.write(data);
-                        writer.releaseLock();
-                        addLog(`[Datagram] Sent: ${path}`, true);
+                        await datagramWriter.write(data);
+                        addLog(`[Datagram] Sent: ${escapeHtml(path)}`, true);
                     }
                 } catch (e) {
                     // Fallback for non-standard OSC or Bundles
@@ -132,9 +140,7 @@
                         await writer.write(data);
                         await writer.close();
                     } else {
-                        const writer = transport.datagrams.writable.getWriter();
-                        await writer.write(data);
-                        writer.releaseLock();
+                        await datagramWriter.write(data);
                     }
                     console.warn("Raw forwarding (OSC parse error):", e);
                 }
@@ -167,13 +173,22 @@
                 return 'failed';
             }
 
+            // Release any previous datagram writer before creating a new transport
+            if (datagramWriter) {
+                try { datagramWriter.releaseLock(); } catch {}
+                datagramWriter = null;
+            }
+
             const nameParam = nameInput ? `&name=${encodeURIComponent(nameInput)}` : '';
             const fullUrl = `https://${baseUrl}:8443/join?id=${sid}${nameParam}`;
 
             try {
-                addLog(`Connecting to Hub: https://${baseUrl}:8443 (Session: ${sid})...`);
+                addLog(`Connecting to Hub: https://${escapeHtml(baseUrl)}:8443 (Session: ${escapeHtml(sid)})...`);
                 transport = new WebTransport(fullUrl);
                 await transport.ready;
+
+                // Acquire a persistent datagram writer for the session
+                datagramWriter = transport.datagrams.writable.getWriter();
 
                 document.getElementById('wt-status').textContent = "Connected";
                 document.getElementById('wt-status').className = "active";
@@ -189,7 +204,7 @@
                     document.getElementById('connectBtn').disabled = false;
                     return 'rejected';
                 } else {
-                    addLog(`Hub connection failed: ${msg}`);
+                    addLog(`Hub connection failed: ${escapeHtml(msg)}`);
                     if (!opts.fromReconnect) {
                         document.getElementById('connectBtn').disabled = false;
                     }
@@ -206,6 +221,10 @@
         }
 
         function handleHubDisconnect() {
+            if (datagramWriter) {
+                try { datagramWriter.releaseLock(); } catch {}
+                datagramWriter = null;
+            }
             document.getElementById('wt-status').textContent = "Disconnected";
             document.getElementById('wt-status').className = "inactive";
             document.getElementById('connectBtn').disabled = false;
@@ -282,11 +301,12 @@
         }
 
         function forwardToBridge(data, type) {
-            // Normalize data for Stream (skip to first '/')
+            // Normalize data for Stream: skip any framing bytes before OSC data.
+            // OSC data begins with '/' (0x2F, message) or '#' (0x23, bundle header).
             let oscData = data;
             if (type === "Stream") {
-                const firstSlash = data.indexOf(47);
-                if (firstSlash !== -1) oscData = data.slice(firstSlash);
+                const start = data.findIndex(b => b === 47 || b === 35);
+                if (start > 0) oscData = data.slice(start);
             }
 
             const parsed = parseOscArgs(oscData);
@@ -301,7 +321,7 @@
                 document.getElementById('client-id-display').textContent = myClientId;
                 document.getElementById('display-name-display').textContent = myDisplayName;
                 document.getElementById('client-info').style.display = 'block';
-                addLog(`Joined as <span style="color:#ffcc00;font-weight:bold;">${myDisplayName}</span> (ID: ${myClientId})`);
+                addLog(`Joined as <span style="color:#ffcc00;font-weight:bold;">${escapeHtml(myDisplayName)}</span> (ID: ${escapeHtml(String(myClientId))})`);
                 return;
             }
 
@@ -309,7 +329,7 @@
                 const ids = parsed.args;
                 document.getElementById('participants-list').textContent =
                     'Participants: ' + ids.join(', ');
-                addLog(`[/who/reply] Participants in session: ${ids.join(', ')}`, true);
+                addLog(`[/who/reply] Participants in session: ${escapeHtml(ids.join(', '))}`, true);
                 // Also forward to SC so OSCdef(\whoReply) can receive it
                 if (wsBridge && wsBridge.readyState === WebSocket.OPEN) {
                     wsBridge.send(oscData);
@@ -323,7 +343,7 @@
             }
 
             if (address) {
-                addLog(`<span class="osc-path">${address}</span> [${type}]`, true);
+                addLog(`<span class="osc-path">${escapeHtml(address)}</span> [${type}]`, true);
             } else {
                 addLog(`Received ${type}: ${data.length} bytes`);
             }

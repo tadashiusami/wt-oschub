@@ -255,6 +255,8 @@ class OSCHubProtocol(QuicConnectionProtocol):
         """Clean up session data when a client disconnects."""
         if self.session_id and self.client_id:
             self.sessions[self.session_id].pop(self.client_id, None)
+            if not self.sessions[self.session_id]:
+                del self.sessions[self.session_id]
             logger.info(f"--- [LEAVE] Session: {self.session_id} | ID: {self.client_id} | Name: {self.display_name} ---")
         super().connection_lost(exc)
 
