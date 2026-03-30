@@ -109,20 +109,20 @@ systemctl enable --now wt-oschub.timer
 
 まだインストールしていない場合は [supercollider.github.io](https://supercollider.github.io) からダウンロード・インストールし、SuperCollider を起動してサーバーをブートします。
 
-ハブから中継されたメッセージは、OSC アドレスが `/remote/<送信者ID>/<元のアドレス>`（例：`/remote/a3f2/s_new`）に書き換えられて届きます。これにより、受信側は誰が送信したかを識別し、`OSCdef` で明示的に処理できます。
+ハブから中継されたメッセージは、OSC アドレスが `/remote/<送信者名>/<元のアドレス>`（例：`/remote/alice/s_new`）に書き換えられて届きます。これにより、受信側は誰が送信したかを識別し、`OSCdef` で明示的に処理できます。
 
 最もシンプルな設定は、全リモートメッセージを受信する単一の `OSCdef` で元のアドレスを取り出して scsynth へ転送するものです:
 
 ```supercollider
 // ハブからの全リモート OSC メッセージを受信する。
-// アドレスの形式は /remote/<送信者ID>/<元のアドレス>。
+// アドレスの形式は /remote/<送信者名>/<元のアドレス>。
 // セッション中は OSCFunc.trace で受信メッセージを確認できます。
 OSCdef(\remoteAll, {|msg|
     var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
-    // parts = ['remote', 'a3f2', 's_new', ...]
+    // parts = ['remote', 'alice', 's_new', ...]
     var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
     s.sendMsg(cmd, *msg[1..]);
-}, '/remote');
+}, nil);
 ```
 
 特定の送信者やコマンドだけを処理する場合:
@@ -131,13 +131,13 @@ OSCdef(\remoteAll, {|msg|
 // 任意のリモート参加者からの /s_new を処理する
 OSCdef(\remoteSNew, {|msg|
     var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
-    var senderId = parts[1];
-    (senderId ++ " triggered /s_new").postln;
+    var senderName = parts[1];
+    (senderName ++ " triggered /s_new").postln;
     s.sendMsg(\s_new, *msg[1..]);
-}, '/remote');
+}, nil);
 ```
 
-> **注意:** OSC Bundle は完全に対応しています。ハブはバンドルをネストを含めて再帰的に解析し、含まれる各メッセージのアドレスを `/remote/<送信者ID>/<元のアドレス>` に書き換えつつ、timetag を保持します。送信側が `sendBundle(delta, ...)` を使用した場合、受信側の sclang はバンドルを展開し、timetag を OSCdef ハンドラの `time` 引数として渡します。意図したタイミングを保持して scsynth へバンドルとして転送するには、以下のように `time` を使用します:
+> **注意:** OSC Bundle は完全に対応しています。ハブはバンドルをネストを含めて再帰的に解析し、含まれる各メッセージのアドレスを `/remote/<送信者名>/<元のアドレス>` に書き換えつつ、timetag を保持します。送信側が `sendBundle(delta, ...)` を使用した場合、受信側の sclang はバンドルを展開し、timetag を OSCdef ハンドラの `time` 引数として渡します。意図したタイミングを保持して scsynth へバンドルとして転送するには、以下のように `time` を使用します:
 > ```supercollider
 > OSCdef(\remoteAll, {|msg, time|
 >     var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
@@ -148,7 +148,7 @@ OSCdef(\remoteSNew, {|msg|
 >     }, {
 >         s.sendMsg(cmd, *msg[1..]);
 >     });
-> }, '/remote');
+> }, nil);
 > ```
 > 各参加者の内部クロック（`thisThread.seconds`）は独立しているため、多少のずれは避けられません。十分に大きな delta（例：5秒）を取ることで、ネットワーク遅延やクロック差を吸収できます。
 
@@ -167,13 +167,13 @@ bridge = SimpleUDPClient("127.0.0.1", 57121)
 # /remote/* メッセージを受信し、元のコマンドを scsynth へ中継する
 def relay(address, *args):
     parts = address.lstrip("/").split("/")
-    # parts = ['remote', 'a3f2', 's_new', ...]
-    if len(parts) >= 3:
+    # parts = ['remote', 'alice', 's_new', ...]
+    if len(parts) >= 3 and parts[0] == "remote":
         cmd = "/" + "/".join(parts[2:])
         bridge.send_message(cmd, list(args))
 
 disp = dispatcher.Dispatcher()
-disp.map("/remote", relay)
+disp.map("/remote/*", relay)
 
 receiver = osc_server.ThreadingOSCUDPServer(("127.0.0.1", 57120), disp)
 threading.Thread(target=receiver.serve_forever, daemon=True).start()
@@ -192,7 +192,7 @@ threading.Thread(target=receiver.serve_forever, daemon=True).start()
 
 ;; /remote/* メッセージを受信し、元のコマンドを scsynth へ中継する
 (def receiver (osc-server 57120))
-(osc-handle receiver "/remote"
+(osc-handle receiver "/remote/*"
   (fn [msg]
     (let [parts (clojure.string/split (:path msg) #"/")
           cmd (str "/" (clojure.string/join "/" (drop 3 parts)))]
@@ -207,9 +207,17 @@ npm install ws
 node bridge.js
 ```
 
+オプション（すべて省略可能、デフォルト値を示す）:
+
+| オプション | デフォルト | 説明 |
+|-----------|-----------|------|
+| `--sc-port` | 57120 | SC/sclang が OSC を受信するポート |
+| `--osc-port` | 57121 | ブリッジが SC からの OSC を受け付けるローカル UDP ポート |
+| `--ws-port` | 8080 | ブリッジがブラウザに公開する WebSocket ポート |
+
 #### 3. ウェブ接続
 
-WebTransport 対応ブラウザでウェブクライアントの URL を開き、セッション ID を入力して **Connect All** をクリックします。接続が完了するとクライアント ID が表示されます。
+WebTransport 対応ブラウザでウェブクライアントの URL を開き、セッション ID と表示名（任意）を入力して **Connect All** をクリックします。接続が完了するとクライアント ID と表示名が表示されます。接続が切断された場合は指数バックオフ（1秒〜30秒）で自動再接続します。
 
 #### 4. OSC メッセージの送信
 
@@ -329,7 +337,7 @@ OSCdef(\forwardSync, {|msg|
         }, '/done');
         s.sendMsg('/sync', syncId);  // ローカルの scsynth へ転送
     });
-}, '/remote');
+}, nil);
 ```
 
 **送信者のワークフロー（sclang）:**
@@ -342,7 +350,7 @@ OSCdef(\forwardSync, {|msg|
 
 // Step 1: 参加者数を取得する
 OSCdef(\whoReply, {|msg|
-    var count = msg.size - 1;  // msg[0] は '/who/reply'、残りがクライアント ID
+    var count = msg.size - 1;  // msg[0] は '/who/reply'、残りが参加者名
     var received = 0;
 
     // Step 3: 全参加者からの /synced を数える
