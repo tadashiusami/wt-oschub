@@ -109,20 +109,20 @@ Share the Web Client URL and a unique Session ID with all participants.
 
 Download and install SuperCollider from [supercollider.github.io](https://supercollider.github.io) if you haven't already. Launch SuperCollider and boot the server.
 
-Messages relayed from the hub arrive with their OSC address rewritten to `/remote/<sender_id>/<original_address>` (e.g. `/remote/a3f2/s_new`). This allows recipients to identify who sent each message and handle it explicitly via `OSCdef`.
+Messages relayed from the hub arrive with their OSC address rewritten to `/remote/<sender_name>/<original_address>` (e.g. `/remote/alice/s_new`). This allows recipients to identify who sent each message and handle it explicitly via `OSCdef`.
 
 The simplest setup is a single `OSCdef` that receives all remote messages, extracts the original address, and forwards them to scsynth:
 
 ```supercollider
 // Receives all remote OSC messages from the hub.
-// The address format is /remote/<sender_id>/<original_address>.
+// The address format is /remote/<sender_name>/<original_address>.
 // Use OSCFunc.trace to inspect incoming messages during a session.
 OSCdef(\remoteAll, {|msg|
     var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
-    // parts = ['remote', 'a3f2', 's_new', ...]
+    // parts = ['remote', 'alice', 's_new', ...]
     var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
     s.sendMsg(cmd, *msg[1..]);
-}, '/remote');
+}, nil);
 ```
 
 To handle messages from a specific sender or command selectively:
@@ -131,13 +131,13 @@ To handle messages from a specific sender or command selectively:
 // Handle /s_new from any remote participant
 OSCdef(\remoteSNew, {|msg|
     var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
-    var senderId = parts[1];
-    (senderId ++ " triggered /s_new").postln;
+    var senderName = parts[1];
+    (senderName ++ " triggered /s_new").postln;
     s.sendMsg(\s_new, *msg[1..]);
-}, '/remote');
+}, nil);
 ```
 
-> **Note:** OSC Bundles are fully supported. The hub parses each Bundle recursively, rewrites the address of every contained message to `/remote/<sender_id>/<original_address>`, and preserves the timetag. When a sender uses `sendBundle(delta, ...)`, sclang on the receiving end unpacks the Bundle and passes the timetag as the `time` argument to the OSCdef handler. To preserve the intended timing and forward it to scsynth as a Bundle, use `time` as follows:
+> **Note:** OSC Bundles are fully supported. The hub parses each Bundle recursively, rewrites the address of every contained message to `/remote/<sender_name>/<original_address>`, and preserves the timetag. When a sender uses `sendBundle(delta, ...)`, sclang on the receiving end unpacks the Bundle and passes the timetag as the `time` argument to the OSCdef handler. To preserve the intended timing and forward it to scsynth as a Bundle, use `time` as follows:
 > ```supercollider
 > OSCdef(\remoteAll, {|msg, time|
 >     var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
@@ -148,7 +148,7 @@ OSCdef(\remoteSNew, {|msg|
 >     }, {
 >         s.sendMsg(cmd, *msg[1..]);
 >     });
-> }, '/remote');
+> }, nil);
 > ```
 > Since each participant's internal clock (`thisThread.seconds`) is independent, some drift is inevitable. Taking a sufficiently large delta (e.g. 5 seconds) helps absorb network latency and clock differences.
 
@@ -167,13 +167,13 @@ bridge = SimpleUDPClient("127.0.0.1", 57121)
 # Receive /remote/* messages and relay the original command to scsynth
 def relay(address, *args):
     parts = address.lstrip("/").split("/")
-    # parts = ['remote', 'a3f2', 's_new', ...]
-    if len(parts) >= 3:
+    # parts = ['remote', 'alice', 's_new', ...]
+    if len(parts) >= 3 and parts[0] == "remote":
         cmd = "/" + "/".join(parts[2:])
         bridge.send_message(cmd, list(args))
 
 disp = dispatcher.Dispatcher()
-disp.map("/remote", relay)
+disp.map("/remote/*", relay)
 
 receiver = osc_server.ThreadingOSCUDPServer(("127.0.0.1", 57120), disp)
 threading.Thread(target=receiver.serve_forever, daemon=True).start()
@@ -192,7 +192,7 @@ threading.Thread(target=receiver.serve_forever, daemon=True).start()
 
 ;; Receive /remote/* messages and relay the original command to scsynth
 (def receiver (osc-server 57120))
-(osc-handle receiver "/remote"
+(osc-handle receiver "/remote/*"
   (fn [msg]
     (let [parts (clojure.string/split (:path msg) #"/")
           cmd (str "/" (clojure.string/join "/" (drop 3 parts)))]
@@ -207,9 +207,17 @@ npm install ws
 node bridge.js
 ```
 
+Options (all optional, defaults shown):
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--sc-port` | 57120 | Port where SC/sclang receives OSC |
+| `--osc-port` | 57121 | Local UDP port the bridge listens on for OSC from SC |
+| `--ws-port` | 8080 | WebSocket port the bridge exposes to the browser |
+
 #### 3. Web Connection
 
-Open the Web Client URL in a WebTransport-capable browser, enter the Hub server address and Session ID, and click **Connect All**. Your Client ID will be displayed once connected.
+Open the Web Client URL in a WebTransport-capable browser. Enter the Session ID and optionally your display name, then click **Connect All**. Your Client ID and display name will be shown once connected. If the connection drops, the client reconnects automatically with exponential backoff (1 s → 30 s).
 
 #### 4. Sending OSC Messages
 
@@ -329,7 +337,7 @@ OSCdef(\forwardSync, {|msg|
         }, '/done');
         s.sendMsg('/sync', syncId);  // forward to local scsynth
     });
-}, '/remote');
+}, nil);
 ```
 
 **Sender workflow (sclang):**
@@ -342,7 +350,7 @@ OSCdef(\forwardSync, {|msg|
 
 // Step 1: query participant count
 OSCdef(\whoReply, {|msg|
-    var count = msg.size - 1;  // msg[0] is '/who/reply', rest are client IDs
+    var count = msg.size - 1;  // msg[0] is '/who/reply', rest are participant names
     var received = 0;
 
     // Step 3: count /synced replies from all participants
