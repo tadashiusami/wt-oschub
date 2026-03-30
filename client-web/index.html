@@ -40,12 +40,18 @@
             <label>Session ID:</label>
             <input type="text" id="sessionId" placeholder="Enter session ID">
         </div>
+        <div class="input-group">
+            <label>Your Name:</label>
+            <input type="text" id="displayName" placeholder="Enter your name (optional)">
+        </div>
         <button onclick="connectAll()" id="connectBtn">Connect All</button>
     </div>
 
     <div id="client-info">
         <span style="color:#aaa;">Your Client ID:</span>
         <span id="client-id-display">—</span>
+        <span style="color:#aaa; margin-left:16px;">Name:</span>
+        <span id="display-name-display" style="color:#ffcc00; font-weight:bold;">—</span>
         <div id="participants-list"></div>
     </div>
 
@@ -150,6 +156,7 @@
             // replace window.location.hostname with the Hub server's hostname directly:
             //   const baseUrl = "your-hub-server.example.com";
             const baseUrl = window.location.hostname;
+            const nameInput = document.getElementById('displayName').value.trim();
 
             if (!sid) {
                 addLog("<span style='color: #ff4444;'>Error: Session ID is required.</span>");
@@ -158,22 +165,28 @@
                 return false;
             }
 
-            const fullUrl = `https://${baseUrl}:8443/join?id=${sid}`;
+            const nameParam = nameInput ? `&name=${encodeURIComponent(nameInput)}` : '';
+            const fullUrl = `https://${baseUrl}:8443/join?id=${sid}${nameParam}`;
 
             try {
-                addLog(`Connecting to Hub: https://${baseUrl}:8443 (ID: ${sid})...`);
+                addLog(`Connecting to Hub: https://${baseUrl}:8443 (Session: ${sid})...`);
                 transport = new WebTransport(fullUrl);
                 await transport.ready;
-                
+
                 document.getElementById('wt-status').textContent = "Connected";
                 document.getElementById('wt-status').className = "active";
-                
+
                 // Initialize Listeners
                 receiveDatagrams();
                 receiveStreams();
                 return true;
             } catch (e) {
-                addLog(`Hub Connection Failed: ${e.message}`);
+                const msg = e.message || String(e);
+                if (msg.includes('409') || msg.includes('conflict')) {
+                    addLog(`<span style='color:#ff4444;'>Hub rejected: name already in use in this session.</span>`);
+                } else {
+                    addLog(`Hub Connection Failed: ${msg}`);
+                }
                 document.getElementById('connectBtn').disabled = false;
                 return false;
             }
@@ -243,9 +256,11 @@
             // /who/reply: participant list — displayed in UI and also forwarded to SC for OSCdef(\whoReply)
             if (address === '/welcome') {
                 myClientId = parsed.args[0];
+                const myDisplayName = parsed.args[1] || myClientId;
                 document.getElementById('client-id-display').textContent = myClientId;
+                document.getElementById('display-name-display').textContent = myDisplayName;
                 document.getElementById('client-info').style.display = 'block';
-                addLog(`Assigned Client ID: <span style="color:#ffcc00;font-weight:bold;">${myClientId}</span>`);
+                addLog(`Joined as <span style="color:#ffcc00;font-weight:bold;">${myDisplayName}</span> (ID: ${myClientId})`);
                 return;
             }
 

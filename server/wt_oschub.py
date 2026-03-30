@@ -11,6 +11,7 @@ import random
 import string
 import struct
 from collections import defaultdict
+from urllib.parse import urlparse, parse_qs
 from aioquic.asyncio import serve
 from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.quic.configuration import QuicConfiguration
@@ -122,6 +123,7 @@ class OSCHubProtocol(QuicConnectionProtocol):
         self._http = H3Connection(self._quic, enable_webtransport=True)
         self.session_id = None
         self.client_id = None
+        self.display_name = None
         self.webtransport_stream_id = None
 
     def quic_event_received(self, event: H3Event):
@@ -133,33 +135,53 @@ class OSCHubProtocol(QuicConnectionProtocol):
             if isinstance(http_event, HeadersReceived):
                 headers = dict(http_event.headers)
                 path = headers.get(b":path", b"/").decode()
+                params = parse_qs(urlparse(path).query)
+                session_id = params.get('id', [''])[0]
 
-                if "id=" in path:
-                    self.session_id = path.split("id=")[-1]
-                    self.webtransport_stream_id = http_event.stream_id
+                if not session_id:
+                    continue
 
-                    # Generate a unique client ID within the session
-                    existing_ids = set(self.sessions[self.session_id].keys())
+                self.webtransport_stream_id = http_event.stream_id
+
+                # Generate a unique client ID within the session
+                existing_ids = set(self.sessions[session_id].keys())
+                self.client_id = generate_client_id()
+                while self.client_id in existing_ids:
                     self.client_id = generate_client_id()
-                    while self.client_id in existing_ids:
-                        self.client_id = generate_client_id()
 
-                    self.sessions[self.session_id][self.client_id] = self
+                # Determine display name (default: assigned client ID)
+                raw_name = params.get('name', [''])[0].strip()
+                display_name = raw_name if raw_name else self.client_id
 
-                    # Accept the WebTransport session
+                # Reject duplicate display names within the session
+                existing_names = {p.display_name for p in self.sessions[session_id].values()}
+                if display_name in existing_names:
                     self._http.send_headers(
                         stream_id=http_event.stream_id,
-                        headers=[
-                            (b":status", b"200"),
-                            (b"sec-webtransport-http3-draft", b"draft02")
-                        ]
+                        headers=[(b":status", b"409")]
                     )
+                    self.transmit()
+                    logger.warning(f"[!] Rejected duplicate name '{display_name}' in session '{session_id}'")
+                    continue
 
-                    # Send /welcome with the assigned client ID to this client only
-                    welcome_msg = build_osc_message('/welcome', self.client_id)
-                    self._send_to_self(welcome_msg)
+                self.session_id = session_id
+                self.display_name = display_name
+                self.sessions[self.session_id][self.client_id] = self
 
-                    logger.info(f"--- [JOIN] Session: {self.session_id} | Client ID: {self.client_id} ---")
+                # Accept the WebTransport session
+                self._http.send_headers(
+                    stream_id=http_event.stream_id,
+                    headers=[
+                        (b":status", b"200"),
+                        (b"sec-webtransport-http3-draft", b"draft02")
+                    ]
+                )
+
+                # Send /welcome with client ID and display name to this client only
+                welcome_msg = build_osc_message('/welcome', self.client_id, self.display_name)
+                self._send_to_self(welcome_msg)
+
+                logger.info(f"--- [JOIN] Session: {self.session_id} | ID: {self.client_id} | Name: {self.display_name} ---")
 
             # 2. Handle Datagrams (Low-latency OSC)
             elif isinstance(http_event, DatagramReceived):
@@ -190,18 +212,18 @@ class OSCHubProtocol(QuicConnectionProtocol):
             logger.error(f"Send-to-self error: {e}")
 
     def _handle_who(self):
-        """Replies to the sender with the list of all client IDs in the session."""
+        """Replies to the sender with the list of display names in the session."""
         if not self.session_id:
             return
-        client_ids = list(self.sessions[self.session_id].keys())
-        reply = build_osc_message('/who/reply', *client_ids)
+        display_names = [p.display_name for p in self.sessions[self.session_id].values()]
+        reply = build_osc_message('/who/reply', *display_names)
         self._send_to_self(reply)
-        logger.info(f"[/who] Replied to {self.client_id} with {client_ids}")
+        logger.info(f"[/who] Replied to '{self.display_name}' with {display_names}")
 
     def broadcast_data(self, data, is_datagram=True):
         """Relays received data to all other clients in the same session.
 
-        The OSC address is rewritten to /remote/<sender_client_id>/<original_address>
+        The OSC address is rewritten to /remote/<display_name>/<original_address>
         so that recipients can identify the sender and route messages via OSCdef.
         """
         if not self.session_id:
@@ -209,10 +231,10 @@ class OSCHubProtocol(QuicConnectionProtocol):
 
         # Rewrite OSC address once for all recipients
         if data[:7] == b'#bundle':
-            rewritten = rewrite_bundle(data, self.client_id)
+            rewritten = rewrite_bundle(data, self.display_name)
         else:
             original_address = parse_osc_address(data)
-            rewritten = rewrite_osc_address(data, self.client_id, original_address)
+            rewritten = rewrite_osc_address(data, self.display_name, original_address)
 
         clients = self.sessions.get(self.session_id, {})
 
@@ -233,7 +255,7 @@ class OSCHubProtocol(QuicConnectionProtocol):
         """Clean up session data when a client disconnects."""
         if self.session_id and self.client_id:
             self.sessions[self.session_id].pop(self.client_id, None)
-            logger.info(f"--- [LEAVE] Session: {self.session_id} | Client ID: {self.client_id} ---")
+            logger.info(f"--- [LEAVE] Session: {self.session_id} | ID: {self.client_id} | Name: {self.display_name} ---")
         super().connection_lost(exc)
 
 async def main():
