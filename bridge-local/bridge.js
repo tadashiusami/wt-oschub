@@ -8,10 +8,23 @@
 const dgram = require('dgram');
 const WebSocket = require('ws');
 
-// --- Configuration ---
-const UDP_SEND_PORT = 57120;    // Target: SuperCollider (sclang) default port
-const UDP_LISTEN_PORT = 57121;  // Local: UDP port for bridge.js to receive from SC
-const WS_PORT = 8080;           // Local: WebSocket port for index.html connection
+// --- Configuration (CLI args: --sc-port, --osc-port, --ws-port) ---
+function parseArgs() {
+    const args = process.argv.slice(2);
+    const result = { 'sc-port': 57120, 'osc-port': 57121, 'ws-port': 8080 };
+    for (let i = 0; i < args.length; i++) {
+        const m = args[i].match(/^--(\S+)$/);
+        if (m && result[m[1]] !== undefined && args[i + 1]) {
+            const v = parseInt(args[++i], 10);
+            if (!isNaN(v)) result[m[1]] = v;
+        }
+    }
+    return result;
+}
+const opts = parseArgs();
+const UDP_SEND_PORT   = opts['sc-port'];   // Target: SuperCollider (sclang) default port
+const UDP_LISTEN_PORT = opts['osc-port'];  // Local: UDP port for bridge.js to receive from SC
+const WS_PORT         = opts['ws-port'];   // Local: WebSocket port for index.html connection
 
 // 1. Initialize UDP Socket for SuperCollider communication
 const udp = dgram.createSocket('udp4');
