@@ -137,7 +137,7 @@ OSCdef(\remoteSNew, {|msg|
 }, '/remote');
 ```
 
-> **Note:** When a sender uses `sendBundle(delta, ...)`, sclang on the receiving end unpacks the Bundle and passes the timetag as the `time` argument to the OSCdef handler. To preserve the intended timing and forward it to scsynth as a Bundle, use `time` as follows:
+> **Note:** OSC Bundles are fully supported. The hub parses each Bundle recursively, rewrites the address of every contained message to `/remote/<sender_id>/<original_address>`, and preserves the timetag. When a sender uses `sendBundle(delta, ...)`, sclang on the receiving end unpacks the Bundle and passes the timetag as the `time` argument to the OSCdef handler. To preserve the intended timing and forward it to scsynth as a Bundle, use `time` as follows:
 > ```supercollider
 > OSCdef(\remoteAll, {|msg, time|
 >     var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
