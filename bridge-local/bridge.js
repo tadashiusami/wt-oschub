@@ -38,10 +38,7 @@ const browserClients = new Set();
  * Listens for OSC messages from SC and forwards them to all connected browsers.
  */
 udp.on('message', (msg, rinfo) => {
-    console.log(`[UDP IN] From SC: ${msg.length} bytes`);
-
     if (browserClients.size === 0) {
-        console.log(' !! Relay failed: No browser connected via WebSocket');
         return;
     }
     for (const client of browserClients) {
@@ -49,7 +46,6 @@ udp.on('message', (msg, rinfo) => {
             client.send(msg);
         }
     }
-    console.log(` -> Relayed to ${browserClients.size} browser(s)`);
 });
 
 /**
@@ -61,15 +57,9 @@ wss.on('connection', (ws) => {
     browserClients.add(ws);
 
     ws.on('message', (data) => {
-        // 'data' contains the binary OSC packet received via WebTransport
-        console.log(`[WS IN] From WebTransport: ${data.length} bytes`);
-
-        // Relay to local SuperCollider instance
         udp.send(data, UDP_SEND_PORT, '127.0.0.1', (err) => {
             if (err) {
                 console.error('SC Send Error:', err);
-            } else {
-                console.log(` -> Relayed to SC Port ${UDP_SEND_PORT}`);
             }
         });
     });

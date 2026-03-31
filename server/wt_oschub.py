@@ -24,11 +24,6 @@ from aioquic.h3.events import (
     WebTransportStreamDataReceived
 )
 
-# Logging configuration
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s'
-)
 logger = logging.getLogger("oschub")
 
 def encode_varint(value: int) -> bytes:
@@ -134,6 +129,7 @@ class OSCHubProtocol(QuicConnectionProtocol):
         self.webtransport_stream_id = None
         self._rate_count = 0
         self._rate_window = 0.0
+        self._stream_buffers: dict = {}  # {stream_id: bytes}
 
     def quic_event_received(self, event: H3Event):
         if self._http is None:
@@ -170,6 +166,16 @@ class OSCHubProtocol(QuicConnectionProtocol):
                 # Determine display name (default: assigned client ID)
                 raw_name = params.get('name', [''])[0].strip()
                 display_name = raw_name if raw_name else self.client_id
+
+                # Reject names containing '/' — corrupts OSC address rewriting
+                if '/' in display_name:
+                    self._http.send_headers(
+                        stream_id=http_event.stream_id,
+                        headers=[(b":status", b"400")]
+                    )
+                    self.transmit()
+                    logger.warning(f"[!] Rejected name '{display_name}': '/' not allowed in names")
+                    continue
 
                 # Reject duplicate display names within the session
                 existing_names = {p.display_name for p in self.sessions[session_id].values()}
@@ -213,15 +219,28 @@ class OSCHubProtocol(QuicConnectionProtocol):
                     self.broadcast_data(http_event.data, is_datagram=True)
 
             # 3. Handle Unidirectional Streams (Reliable OSC — SynthDef, Buffer, Sync)
+            # Buffer fragments per stream_id until stream_ended=True
             elif isinstance(http_event, WebTransportStreamDataReceived):
-                if not self._check_limits(http_event.data):
+                sid = http_event.stream_id
+                buf = self._stream_buffers.get(sid, b'') + http_event.data
+                if len(buf) > OSCHubProtocol.max_msg_size:
+                    logger.warning(
+                        f"[LIMIT] Stream buffer overflow ({len(buf)} bytes) from '{self.display_name}' — dropped"
+                    )
+                    self._stream_buffers.pop(sid, None)
                     continue
-                address = parse_osc_address(http_event.data)
-                logger.info(f"Stream received: {address} ({len(http_event.data)} bytes)")
-                if address == '/who' or self._bundle_contains_who(http_event.data):
+                if not http_event.stream_ended:
+                    self._stream_buffers[sid] = buf
+                    continue
+                self._stream_buffers.pop(sid, None)
+                if not self._check_limits(buf):
+                    continue
+                address = parse_osc_address(buf)
+                logger.info(f"Stream received: {address} ({len(buf)} bytes)")
+                if address == '/who' or self._bundle_contains_who(buf):
                     self._handle_who()
                 else:
-                    self.broadcast_data(http_event.data, is_datagram=False)
+                    self.broadcast_data(buf, is_datagram=False)
 
     def _check_limits(self, data: bytes) -> bool:
         """Returns False (and logs) if the message exceeds size or rate limits."""
@@ -335,7 +354,10 @@ async def main():
                         help="Log level (default: INFO)")
     args = parser.parse_args()
 
-    logging.getLogger().setLevel(getattr(logging, args.log_level.upper()))
+    logging.basicConfig(
+        level=getattr(logging, args.log_level.upper()),
+        format='%(asctime)s [%(levelname)s] %(message)s'
+    )
 
     OSCHubProtocol.max_msg_size = args.max_msg_size
     OSCHubProtocol.rate_limit = args.rate_limit
