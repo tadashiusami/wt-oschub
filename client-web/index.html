@@ -45,6 +45,10 @@
             <input type="text" id="displayName" placeholder="Enter your name (optional)">
         </div>
         <div class="input-group">
+            <label>Hub Port:</label>
+            <input type="text" id="hubPort" placeholder="8443" value="8443" style="width:80px;">
+        </div>
+        <div class="input-group">
             <label>Bridge Port:</label>
             <input type="text" id="bridgePort" placeholder="8080" value="8080" style="width:80px;">
         </div>
@@ -92,6 +96,10 @@
 
         // --- 1. Local WebSocket Bridge (bridge.js) Connection ---
         function connectLocalBridge() {
+            if (wsBridge) {
+                wsBridge.onclose = null;  // prevent stale auto-reconnect from old handler
+                wsBridge.close();
+            }
             const port = document.getElementById('bridgePort').value.trim() || '8080';
             wsBridge = new WebSocket(`ws://localhost:${port}`);
             wsBridge.binaryType = 'arraybuffer';
@@ -103,17 +111,24 @@
             };
 
             wsBridge.onmessage = async (event) => {
+                // Guard: do not forward if hub transport is not ready
+                if (!transport || !datagramWriter) return;
+
                 const arrayBuffer = event.data;
                 const data = new Uint8Array(arrayBuffer);
 
                 // OSC bundles ('#bundle', first byte 0x23): always use Stream.
                 // Bundles carry timetags for synchronized timing — reliable delivery is required.
                 if (data[0] === 0x23) {
-                    const stream = await transport.createUnidirectionalStream();
-                    const writer = stream.getWriter();
-                    await writer.write(data);
-                    await writer.close();
-                    addLog(`[Stream] Sent bundle (${data.length} bytes)`, true);
+                    try {
+                        const stream = await transport.createUnidirectionalStream();
+                        const writer = stream.getWriter();
+                        await writer.write(data);
+                        await writer.close();
+                        addLog(`[Stream] Sent bundle (${data.length} bytes)`, true);
+                    } catch (e) {
+                        console.warn('Bundle stream send failed:', e);
+                    }
                     return;
                 }
 
@@ -148,14 +163,16 @@
                     }
                 } catch (e) {
                     // Fallback for unrecognised OSC (not a bundle, not a standard message)
-                    if (data.length > 1000) {
-                        const stream = await transport.createUnidirectionalStream();
-                        const writer = stream.getWriter();
-                        await writer.write(data);
-                        await writer.close();
-                    } else {
-                        await datagramWriter.write(data);
-                    }
+                    try {
+                        if (transport && data.length > 1000) {
+                            const stream = await transport.createUnidirectionalStream();
+                            const writer = stream.getWriter();
+                            await writer.write(data);
+                            await writer.close();
+                        } else if (datagramWriter) {
+                            await datagramWriter.write(data);
+                        }
+                    } catch {}
                     console.warn("Raw forwarding (OSC parse error):", e);
                 }
             };
@@ -193,11 +210,12 @@
                 datagramWriter = null;
             }
 
+            const hubPort = document.getElementById('hubPort').value.trim() || '8443';
             const nameParam = nameInput ? `&name=${encodeURIComponent(nameInput)}` : '';
-            const fullUrl = `https://${baseUrl}:8443/join?id=${sid}${nameParam}`;
+            const fullUrl = `https://${baseUrl}:${hubPort}/join?id=${sid}${nameParam}`;
 
             try {
-                addLog(`Connecting to Hub: https://${escapeHtml(baseUrl)}:8443 (Session: ${escapeHtml(sid)})...`);
+                addLog(`Connecting to Hub: https://${escapeHtml(baseUrl)}:${escapeHtml(hubPort)} (Session: ${escapeHtml(sid)})...`);
                 transport = new WebTransport(fullUrl);
                 await transport.ready;
 

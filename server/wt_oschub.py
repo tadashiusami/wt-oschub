@@ -154,11 +154,10 @@ class OSCHubProtocol(QuicConnectionProtocol):
 
                 # Generate a unique client ID within the session (max 10 attempts)
                 existing_ids = set(self.sessions[session_id].keys())
-                self.client_id = generate_client_id()
-                for _ in range(9):
+                for _ in range(10):
+                    self.client_id = generate_client_id()
                     if self.client_id not in existing_ids:
                         break
-                    self.client_id = generate_client_id()
                 else:
                     self._http.send_headers(
                         stream_id=http_event.stream_id,
