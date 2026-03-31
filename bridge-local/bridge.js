@@ -86,9 +86,18 @@ wss.on('connection', (ws) => {
 });
 
 // Start UDP listener
-udp.bind(UDP_LISTEN_PORT);
+udp.bind(UDP_LISTEN_PORT, () => {
+    console.log(` - Listening for SC on UDP:${UDP_LISTEN_PORT}`);
+});
+
+udp.on('error', (err) => {
+    console.error(`UDP error: ${err.message}`);
+    if (err.code === 'EADDRINUSE') {
+        console.error(`Port ${UDP_LISTEN_PORT} is already in use. Is another bridge running?`);
+        process.exit(1);
+    }
+});
 
 console.log(`Bridge active:`);
-console.log(` - Listening for SC on UDP:${UDP_LISTEN_PORT}`);
 console.log(` - Forwarding to SC on UDP:${UDP_SEND_PORT}`);
 console.log(` - WebSocket for index.html on port:${WS_PORT}`);

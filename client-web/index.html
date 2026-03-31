@@ -44,6 +44,10 @@
             <label>Your Name:</label>
             <input type="text" id="displayName" placeholder="Enter your name (optional)">
         </div>
+        <div class="input-group">
+            <label>Bridge Port:</label>
+            <input type="text" id="bridgePort" placeholder="8080" value="8080" style="width:80px;">
+        </div>
         <button onclick="connectAll()" id="connectBtn">Connect All</button>
     </div>
 
@@ -67,7 +71,6 @@
         let wsBridge;   // Local WebSocket Bridge (bridge.js)
         let datagramWriter = null;  // Persistent datagram writer
         let myClientId = null;
-        const osc = new OSC();
         let reconnectDelay = 1000;
         const MAX_RECONNECT_DELAY = 30000;
 
@@ -89,8 +92,8 @@
 
         // --- 1. Local WebSocket Bridge (bridge.js) Connection ---
         function connectLocalBridge() {
-            // bridge.js typically runs on localhost:8080
-            wsBridge = new WebSocket('ws://localhost:8080');
+            const port = document.getElementById('bridgePort').value.trim() || '8080';
+            wsBridge = new WebSocket(`ws://localhost:${port}`);
             wsBridge.binaryType = 'arraybuffer';
 
             wsBridge.onopen = () => {
@@ -100,9 +103,20 @@
             };
 
             wsBridge.onmessage = async (event) => {
-                const arrayBuffer = event.data;    
+                const arrayBuffer = event.data;
                 const data = new Uint8Array(arrayBuffer);
-                
+
+                // OSC bundles ('#bundle', first byte 0x23): always use Stream.
+                // Bundles carry timetags for synchronized timing — reliable delivery is required.
+                if (data[0] === 0x23) {
+                    const stream = await transport.createUnidirectionalStream();
+                    const writer = stream.getWriter();
+                    await writer.write(data);
+                    await writer.close();
+                    addLog(`[Stream] Sent bundle (${data.length} bytes)`, true);
+                    return;
+                }
+
                 try {
                     const message = new OSC.Message();
                     const view = new DataView(arrayBuffer);
@@ -116,10 +130,10 @@
                     // 3. Sync commands (/sy) — for async command synchronization
                     // 4. Large payloads (> 1000 bytes)
                     // All other messages use Datagrams for minimum latency.
-                    const useStream = 
-                        path.startsWith('/d_') || 
-                        path.startsWith('/b_') || 
-                        path.startsWith('/sy') || 
+                    const useStream =
+                        path.startsWith('/d_') ||
+                        path.startsWith('/b_') ||
+                        path.startsWith('/sy') ||
                         data.length > 1000;
 
                     if (useStream) {
@@ -133,7 +147,7 @@
                         addLog(`[Datagram] Sent: ${escapeHtml(path)}`, true);
                     }
                 } catch (e) {
-                    // Fallback for non-standard OSC or Bundles
+                    // Fallback for unrecognised OSC (not a bundle, not a standard message)
                     if (data.length > 1000) {
                         const stream = await transport.createUnidirectionalStream();
                         const writer = stream.getWriter();

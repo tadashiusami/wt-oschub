@@ -10,6 +10,7 @@ import argparse
 import random
 import string
 import struct
+import time
 from collections import defaultdict
 from urllib.parse import urlparse, parse_qs
 from aioquic.asyncio import serve
@@ -58,6 +59,8 @@ def build_osc_message(address: str, *args) -> bytes:
 
 def parse_osc_address(data: bytes) -> str:
     """Extracts the OSC address from a raw OSC message."""
+    if not data or data[0:1] != b'/':
+        return ''
     try:
         end = data.index(b'\x00')
         return data[:end].decode('utf-8')
@@ -118,6 +121,10 @@ class OSCHubProtocol(QuicConnectionProtocol):
     # {session_id: {client_id: protocol}}
     sessions = defaultdict(dict)
 
+    # Configurable limits (set from main() after arg parsing)
+    max_msg_size: int = 65536  # bytes
+    rate_limit: int = 200      # messages per second per client
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._http = H3Connection(self._quic, enable_webtransport=True)
@@ -125,6 +132,8 @@ class OSCHubProtocol(QuicConnectionProtocol):
         self.client_id = None
         self.display_name = None
         self.webtransport_stream_id = None
+        self._rate_count = 0
+        self._rate_window = 0.0
 
     def quic_event_received(self, event: H3Event):
         if self._http is None:
@@ -143,11 +152,21 @@ class OSCHubProtocol(QuicConnectionProtocol):
 
                 self.webtransport_stream_id = http_event.stream_id
 
-                # Generate a unique client ID within the session
+                # Generate a unique client ID within the session (max 10 attempts)
                 existing_ids = set(self.sessions[session_id].keys())
                 self.client_id = generate_client_id()
-                while self.client_id in existing_ids:
+                for _ in range(9):
+                    if self.client_id not in existing_ids:
+                        break
                     self.client_id = generate_client_id()
+                else:
+                    self._http.send_headers(
+                        stream_id=http_event.stream_id,
+                        headers=[(b":status", b"503")]
+                    )
+                    self.transmit()
+                    logger.warning(f"[!] Could not assign unique client ID in session '{session_id}' — rejected")
+                    continue
 
                 # Determine display name (default: assigned client ID)
                 raw_name = params.get('name', [''])[0].strip()
@@ -185,23 +204,63 @@ class OSCHubProtocol(QuicConnectionProtocol):
 
             # 2. Handle Datagrams (Low-latency OSC)
             elif isinstance(http_event, DatagramReceived):
+                if not self._check_limits(http_event.data):
+                    continue
                 address = parse_osc_address(http_event.data)
                 logger.debug(f"Datagram received: {address} ({len(http_event.data)} bytes)")
-                if address == '/who':
-                    # Hub-only: reply with participant list, do not broadcast
+                if address == '/who' or self._bundle_contains_who(http_event.data):
                     self._handle_who()
                 else:
                     self.broadcast_data(http_event.data, is_datagram=True)
 
             # 3. Handle Unidirectional Streams (Reliable OSC — SynthDef, Buffer, Sync)
             elif isinstance(http_event, WebTransportStreamDataReceived):
+                if not self._check_limits(http_event.data):
+                    continue
                 address = parse_osc_address(http_event.data)
                 logger.info(f"Stream received: {address} ({len(http_event.data)} bytes)")
-                if address == '/who':
-                    # Hub-only: reply with participant list, do not broadcast
+                if address == '/who' or self._bundle_contains_who(http_event.data):
                     self._handle_who()
                 else:
                     self.broadcast_data(http_event.data, is_datagram=False)
+
+    def _check_limits(self, data: bytes) -> bool:
+        """Returns False (and logs) if the message exceeds size or rate limits."""
+        if len(data) > OSCHubProtocol.max_msg_size:
+            logger.warning(
+                f"[LIMIT] Oversized message ({len(data)} bytes) from '{self.display_name}' — dropped"
+            )
+            return False
+        now = time.monotonic()
+        if now - self._rate_window >= 1.0:
+            self._rate_count = 0
+            self._rate_window = now
+        self._rate_count += 1
+        if self._rate_count > OSCHubProtocol.rate_limit:
+            logger.warning(
+                f"[LIMIT] Rate limit exceeded by '{self.display_name}' ({self._rate_count} msg/s) — dropped"
+            )
+            return False
+        return True
+
+    def _bundle_contains_who(self, data: bytes) -> bool:
+        """Returns True if data is an OSC bundle containing a /who message."""
+        if data[:7] != b'#bundle' or len(data) < 16:
+            return False
+        pos = 16
+        while pos + 4 <= len(data):
+            size = struct.unpack('>I', data[pos:pos + 4])[0]
+            pos += 4
+            if pos + size > len(data):
+                break
+            elem = data[pos:pos + size]
+            pos += size
+            if elem[:7] == b'#bundle':
+                if self._bundle_contains_who(elem):
+                    return True
+            elif parse_osc_address(elem) == '/who':
+                return True
+        return False
 
     def _send_to_self(self, data: bytes):
         """Sends an OSC message to this client only via Datagram."""
@@ -266,7 +325,20 @@ async def main():
     parser.add_argument("--port", type=int, default=8443, help="Listen port")
     parser.add_argument("--cert", required=True, help="Path to TLS certificate (fullchain.pem)")
     parser.add_argument("--key", required=True, help="Path to TLS private key (privkey.pem)")
+    parser.add_argument("--max-msg-size", type=int, default=65536,
+                        help="Max OSC message size in bytes per message (default: 65536)")
+    parser.add_argument("--rate-limit", type=int, default=200,
+                        help="Max messages per second per client (default: 200)")
+    parser.add_argument("--log-level", default="INFO",
+                        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+                        help="Log level (default: INFO)")
     args = parser.parse_args()
+
+    logging.getLogger().setLevel(getattr(logging, args.log_level.upper()))
+
+    OSCHubProtocol.max_msg_size = args.max_msg_size
+    OSCHubProtocol.rate_limit = args.rate_limit
+    logger.info(f"Limits: max_msg_size={args.max_msg_size} bytes, rate_limit={args.rate_limit} msg/s")
 
     configuration = QuicConfiguration(
         is_client=False,

@@ -55,6 +55,15 @@ pip install aioquic
 python wt_oschub.py --cert /path/to/fullchain.pem --key /path/to/privkey.pem
 ```
 
+Additional options (all optional):
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--port` | 8443 | Hub listen port |
+| `--max-msg-size` | 65536 | Max OSC message size in bytes per message |
+| `--rate-limit` | 200 | Max messages per second per client |
+| `--log-level` | INFO | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+
 Then host `index.html` on an HTTPS-enabled web server.
 
 > **Note:** The Hub port defaults to `8443` and can be changed to any available port using `--port`. If changed, update the port number in `index.html` accordingly. The Hub server's hostname is automatically derived from `window.location.hostname` — no manual URL entry is needed as long as the Web server and Hub server run on the same machine. If they are on separate machines, edit `baseUrl` in `index.html` directly.
@@ -217,7 +226,7 @@ Options (all optional, defaults shown):
 
 #### 3. Web Connection
 
-Open the Web Client URL in a WebTransport-capable browser. Enter the Session ID and optionally your display name, then click **Connect All**. Your Client ID and display name will be shown once connected. If the connection drops, the client reconnects automatically with exponential backoff (1 s → 30 s).
+Open the Web Client URL in a WebTransport-capable browser. Enter the Session ID, optionally your display name, and the Bridge Port (default: `8080`, must match the `--ws-port` used when starting `bridge.js`). Then click **Connect All**. Your Client ID and display name will be shown once connected. If the connection drops, the client reconnects automatically with exponential backoff (1 s → 30 s).
 
 #### 4. Sending OSC Messages
 
@@ -295,6 +304,7 @@ bridge.send_message("/n_free", [11000])
 ### Traffic Routing
 
 Messages are routed to **WebTransport Streams** if:
+- The message is an **OSC Bundle** (always sent via Stream for reliable timetag delivery)
 - OSC address starts with `/d_` (SynthDef), `/b_` (Buffer), or `/sy` (Sync — for reliable delivery of async command synchronization)
 - Data size exceeds 1000 bytes
 
