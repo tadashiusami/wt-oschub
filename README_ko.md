@@ -161,9 +161,9 @@ OSCdef(\remoteSNew, {|msg|
 > ```
 > 각 참가자의 내부 클록（`thisThread.seconds`）은 독립적이므로 약간의 오차는 피할 수 없습니다. 충분히 큰 delta（예: 5초）를 사용하면 네트워크 지연과 클록 차이를 흡수할 수 있습니다.
 
-다른 SC 호환 환경도 사용할 수 있습니다. Python（supriya）과 Clojure（Overtone）의 동등한 설정 코드:
+다른 SC 호환 환경도 사용할 수 있습니다. Python（Supriya）과 Clojure（Overtone）의 동등한 설정 코드:
 
-**Python (supriya):**
+**Python (Supriya):**
 
 ```python
 import threading
@@ -255,9 +255,9 @@ WebTransport 지원 브라우저에서 웹 클라이언트 URL을 열고, 세션
 ~bridge.sendMsg(\n_free, 11000);
 ```
 
-Python（supriya）과 Clojure（Overtone）의 동등한 전송 코드:
+Python（Supriya）과 Clojure（Overtone）의 동등한 전송 코드:
 
-**Python (supriya):**
+**Python (Supriya):**
 
 ```python
 # SynthDef를 정의하고 바이트열로 컴파일합니다

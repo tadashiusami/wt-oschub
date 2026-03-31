@@ -161,9 +161,9 @@ OSCdef(\remoteSNew, {|msg|
 > ```
 > Vì đồng hồ nội bộ của mỗi người tham gia (`thisThread.seconds`) là độc lập, một số drift là không thể tránh khỏi. Dùng delta đủ lớn (ví dụ: 5 giây) giúp hấp thụ độ trễ mạng và sự khác biệt đồng hồ.
 
-Bạn cũng có thể dùng các môi trường tương thích SC khác. Code cài đặt tương đương cho Python (supriya) và Clojure (Overtone):
+Bạn cũng có thể dùng các môi trường tương thích SC khác. Code cài đặt tương đương cho Python (Supriya) và Clojure (Overtone):
 
-**Python (supriya):**
+**Python (Supriya):**
 
 ```python
 import threading
@@ -255,9 +255,9 @@ Khi tất cả người tham gia đã kết nối, tin nhắn OSC gửi đến `
 ~bridge.sendMsg(\n_free, 11000);
 ```
 
-Code gửi tương đương cho Python (supriya) và Clojure (Overtone):
+Code gửi tương đương cho Python (Supriya) và Clojure (Overtone):
 
-**Python (supriya):**
+**Python (Supriya):**
 
 ```python
 # Định nghĩa SynthDef và compile thành bytes

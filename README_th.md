@@ -161,9 +161,9 @@ OSCdef(\remoteSNew, {|msg|
 > ```
 > เนื่องจากนาฬิกาภายในของผู้เข้าร่วมแต่ละคน (`thisThread.seconds`) เป็นอิสระ drift บางส่วนจึงหลีกเลี่ยงไม่ได้ การใช้ delta ที่ใหญ่พอ (เช่น 5 วินาที) ช่วยดูดซับความหน่วงของเครือข่ายและความแตกต่างของนาฬิกา
 
-คุณยังสามารถใช้สภาพแวดล้อมที่ใช้งานร่วมกับ SC ได้ รหัสตั้งค่าที่เทียบเท่าสำหรับ Python (supriya) และ Clojure (Overtone):
+คุณยังสามารถใช้สภาพแวดล้อมที่ใช้งานร่วมกับ SC ได้ รหัสตั้งค่าที่เทียบเท่าสำหรับ Python (Supriya) และ Clojure (Overtone):
 
-**Python (supriya):**
+**Python (Supriya):**
 
 ```python
 import threading
@@ -255,9 +255,9 @@ node bridge.js
 ~bridge.sendMsg(\n_free, 11000);
 ```
 
-รหัสส่งที่เทียบเท่าสำหรับ Python (supriya) และ Clojure (Overtone):
+รหัสส่งที่เทียบเท่าสำหรับ Python (Supriya) และ Clojure (Overtone):
 
-**Python (supriya):**
+**Python (Supriya):**
 
 ```python
 # กำหนด SynthDef และ compile เป็น bytes

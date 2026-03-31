@@ -161,9 +161,9 @@ OSCdef(\remoteSNew, {|msg|
 > ```
 > Since each participant's internal clock (`thisThread.seconds`) is independent, some drift is inevitable. Taking a sufficiently large delta (e.g. 5 seconds) helps absorb network latency and clock differences.
 
-You can also use other SC-compatible environments. Equivalent setup code for Python (supriya) and Clojure (Overtone):
+You can also use other SC-compatible environments. Equivalent setup code for Python (Supriya) and Clojure (Overtone):
 
-**Python (supriya):**
+**Python (Supriya):**
 
 ```python
 import threading
@@ -255,9 +255,9 @@ Once all participants are connected, OSC messages sent to `~bridge` are relayed 
 ~bridge.sendMsg(\n_free, 11000);
 ```
 
-Equivalent sending code for Python (supriya) and Clojure (Overtone):
+Equivalent sending code for Python (Supriya) and Clojure (Overtone):
 
-**Python (supriya):**
+**Python (Supriya):**
 
 ```python
 # Define a SynthDef and compile to bytes

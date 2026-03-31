@@ -161,9 +161,9 @@ OSCdef(\remoteSNew, {|msg|
 > ```
 > Karena jam internal setiap peserta (`thisThread.seconds`) bersifat independen, beberapa drift tidak dapat dihindari. Menggunakan delta yang cukup besar (mis. 5 detik) membantu menyerap latensi jaringan dan perbedaan jam.
 
-Anda juga dapat menggunakan lingkungan kompatibel SC lainnya. Kode setup yang setara untuk Python (supriya) dan Clojure (Overtone):
+Anda juga dapat menggunakan lingkungan kompatibel SC lainnya. Kode setup yang setara untuk Python (Supriya) dan Clojure (Overtone):
 
-**Python (supriya):**
+**Python (Supriya):**
 
 ```python
 import threading
@@ -255,9 +255,9 @@ Setelah semua peserta terhubung, pesan OSC yang dikirim ke `~bridge` akan direla
 ~bridge.sendMsg(\n_free, 11000);
 ```
 
-Kode pengiriman yang setara untuk Python (supriya) dan Clojure (Overtone):
+Kode pengiriman yang setara untuk Python (Supriya) dan Clojure (Overtone):
 
-**Python (supriya):**
+**Python (Supriya):**
 
 ```python
 # Definisikan SynthDef dan compile ke bytes

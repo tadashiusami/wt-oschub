@@ -161,9 +161,9 @@ OSCdef(\remoteSNew, {|msg|
 > ```
 > Dahil ang panloob na orasan ng bawat kalahok (`thisThread.seconds`) ay independyente, ang ilang drift ay hindi maiiwasan. Ang paggamit ng sapat na malaking delta (hal. 5 segundo) ay tumutulong na masipsip ang network latency at pagkakaiba ng orasan.
 
-Maaari ka ring gumamit ng iba pang SC-compatible na kapaligiran. Katumbas na setup code para sa Python (supriya) at Clojure (Overtone):
+Maaari ka ring gumamit ng iba pang SC-compatible na kapaligiran. Katumbas na setup code para sa Python (Supriya) at Clojure (Overtone):
 
-**Python (supriya):**
+**Python (Supriya):**
 
 ```python
 import threading
@@ -255,9 +255,9 @@ Kapag nakakonekta na ang lahat ng kalahok, ang mga OSC mensaheng ipinadala sa `~
 ~bridge.sendMsg(\n_free, 11000);
 ```
 
-Katumbas na sending code para sa Python (supriya) at Clojure (Overtone):
+Katumbas na sending code para sa Python (Supriya) at Clojure (Overtone):
 
-**Python (supriya):**
+**Python (Supriya):**
 
 ```python
 # Tukuyin ang SynthDef at i-compile sa bytes

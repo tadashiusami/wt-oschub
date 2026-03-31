@@ -161,9 +161,9 @@ OSCdef(\remoteSNew, {|msg|
 > ```
 > 各参与者的内部时钟（`thisThread.seconds`）是独立的，因此难免存在一定误差。使用足够大的 delta（例如 5 秒）可以吸收网络延迟和时钟差异。
 
-也可以使用其他兼容 SC 的环境。Python（supriya）和 Clojure（Overtone）的等效设置代码：
+也可以使用其他兼容 SC 的环境。Python（Supriya）和 Clojure（Overtone）的等效设置代码：
 
-**Python (supriya):**
+**Python (Supriya):**
 
 ```python
 import threading
@@ -255,9 +255,9 @@ node bridge.js
 ~bridge.sendMsg(\n_free, 11000);
 ```
 
-Python（supriya）和 Clojure（Overtone）的等效发送代码：
+Python（Supriya）和 Clojure（Overtone）的等效发送代码：
 
-**Python (supriya):**
+**Python (Supriya):**
 
 ```python
 # 定义 SynthDef 并编译为字节数组
