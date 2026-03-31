@@ -66,7 +66,7 @@ Additional options (all optional):
 
 Then host `index.html` on an HTTPS-enabled web server.
 
-> **Note:** The Hub port defaults to `8443` and can be changed to any available port using `--port`. If changed, update the port number in `index.html` accordingly. The Hub server's hostname is automatically derived from `window.location.hostname` — no manual URL entry is needed as long as the Web server and Hub server run on the same machine. If they are on separate machines, edit `baseUrl` in `index.html` directly.
+> **Note:** The Hub port defaults to `8443` and can be changed with `--port`. The Web Client now has a **Hub Port** input field (default: `8443`) — update it to match `--port` if changed. No need to edit `index.html`. The Hub server's hostname is automatically derived from `window.location.hostname` — no manual URL entry is needed as long as the Web server and Hub server run on the same machine. If they are on separate machines, edit `baseUrl` in `index.html` directly.
 
 If the server runs Linux, systemd can be used to manage `wt_oschub.py` as a service and schedule daily restarts. Create the following two files:
 
@@ -226,7 +226,7 @@ Options (all optional, defaults shown):
 
 #### 3. Web Connection
 
-Open the Web Client URL in a WebTransport-capable browser. Enter the Session ID, optionally your display name, and the Bridge Port (default: `8080`, must match the `--ws-port` used when starting `bridge.js`). Then click **Connect All**. Your Client ID and display name will be shown once connected. If the connection drops, the client reconnects automatically with exponential backoff (1 s → 30 s).
+Open the Web Client URL in a WebTransport-capable browser. Enter the Session ID, optionally your display name (must not contain `/`), the Hub Port (default: `8443`, must match `--port`), and the Bridge Port (default: `8080`, must match `--ws-port`). Then click **Connect All**. Your Client ID and display name will be shown once connected. If the connection drops, the client reconnects automatically with exponential backoff (1 s → 30 s).
 
 #### 4. Sending OSC Messages
 
