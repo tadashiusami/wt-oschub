@@ -89,14 +89,14 @@ def rewrite_osc_address(data: bytes, client_id: str, original_address: str) -> b
         return data
 
 
-def rewrite_bundle(data: bytes, client_id: str) -> bytes:
+def rewrite_bundle(data: bytes, client_id: str, _depth: int = 0) -> bytes:
     """Recursively rewrite OSC addresses within an OSC bundle.
 
     Preserves the bundle header (including timetag) and rewrites each
     contained OSC message address. Nested bundles are handled recursively.
     Returns the original data unchanged on any parse error.
     """
-    if len(data) < 16:
+    if _depth > 8 or len(data) < 16:
         return data
     # '#bundle\0' (8 bytes) + timetag (8 bytes)
     header = data[:16]
@@ -110,7 +110,7 @@ def rewrite_bundle(data: bytes, client_id: str) -> bytes:
         elem = data[pos:pos + size]
         pos += size
         if elem[:7] == b'#bundle':
-            rewritten_elem = rewrite_bundle(elem, client_id)
+            rewritten_elem = rewrite_bundle(elem, client_id, _depth + 1)
         else:
             orig_addr = parse_osc_address(elem)
             rewritten_elem = rewrite_osc_address(elem, client_id, orig_addr)
@@ -243,8 +243,10 @@ class OSCHubProtocol(QuicConnectionProtocol):
             return False
         return True
 
-    def _bundle_contains_who(self, data: bytes) -> bool:
+    def _bundle_contains_who(self, data: bytes, _depth: int = 0) -> bool:
         """Returns True if data is an OSC bundle containing a /who message."""
+        if _depth > 8:
+            return False
         if data[:7] != b'#bundle' or len(data) < 16:
             return False
         pos = 16
@@ -256,7 +258,7 @@ class OSCHubProtocol(QuicConnectionProtocol):
             elem = data[pos:pos + size]
             pos += size
             if elem[:7] == b'#bundle':
-                if self._bundle_contains_who(elem):
+                if self._bundle_contains_who(elem, _depth + 1):
                     return True
             elif parse_osc_address(elem) == '/who':
                 return True
