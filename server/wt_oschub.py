@@ -100,7 +100,7 @@ def rewrite_bundle(data: bytes, client_id: str, _depth: int = 0) -> bytes:
     while pos + 4 <= len(data):
         size = struct.unpack('>I', data[pos:pos + 4])[0]
         pos += 4
-        if pos + size > len(data):
+        if size == 0 or pos + size > len(data):
             break
         elem = data[pos:pos + size]
         pos += size
@@ -142,7 +142,7 @@ class OSCHubProtocol(QuicConnectionProtocol):
                 headers = dict(http_event.headers)
                 path = headers.get(b":path", b"/").decode()
                 params = parse_qs(urlparse(path).query)
-                session_id = params.get('id', [''])[0]
+                session_id = params.get('id', [''])[0].strip()
 
                 if not session_id:
                     continue
@@ -276,7 +276,7 @@ class OSCHubProtocol(QuicConnectionProtocol):
         while pos + 4 <= len(data):
             size = struct.unpack('>I', data[pos:pos + 4])[0]
             pos += 4
-            if pos + size > len(data):
+            if size == 0 or pos + size > len(data):
                 break
             elem = data[pos:pos + size]
             pos += size
