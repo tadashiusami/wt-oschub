@@ -274,7 +274,7 @@ python local.py your-hub-server.com --session my-session
 
 #### 3. 웹 연결
 
-WebTransport 지원 브라우저에서 웹 클라이언트 URL을 열고, 세션 ID·표시 이름（선택 사항, `/` 포함 불가）·Hub Port（기본값: `8443`、`--port`에 맞게 조정）·Bridge Port（기본값: `8080`、`--ws-port`에 맞게 조정）를 입력하고 **Connect All**을 클릭합니다. 연결이 완료되면 클라이언트 ID와 표시 이름이 표시됩니다. 연결이 끊어지면 지수 백오프（1초~30초）로 자동 재연결합니다.
+WebTransport 지원 브라우저에서 웹 클라이언트 URL을 열고, 세션 ID·표시 이름（선택 사항, `/` 포함 불가, 64자 이하）·Hub Port（기본값: `8443`、`--port`에 맞게 조정）·Bridge Port（기본값: `8080`、`--ws-port`에 맞게 조정）를 입력하고 **Connect All**을 클릭합니다. 연결이 완료되면 클라이언트 ID와 표시 이름이 표시됩니다. 연결이 끊어지면 지수 백오프（1초~30초）로 자동 재연결합니다.
 
 #### 4. OSC 메시지 전송
 

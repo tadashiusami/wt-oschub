@@ -274,7 +274,7 @@ Khi kết nối, console hiển thị tên và ID được cấp. OSC routing (d
 
 #### 3. Kết nối Web
 
-Mở URL Web Client trong trình duyệt hỗ trợ WebTransport. Nhập Session ID, tùy chọn tên hiển thị (không được chứa `/`), Hub Port (mặc định: `8443`, phải khớp với `--port`), và Bridge Port (mặc định: `8080`, phải khớp với `--ws-port`). Sau đó nhấp **Connect All**. Client ID và tên hiển thị sẽ được hiển thị khi kết nối. Nếu kết nối bị ngắt, client tự động kết nối lại với exponential backoff (1s → 30s).
+Mở URL Web Client trong trình duyệt hỗ trợ WebTransport. Nhập Session ID, tùy chọn tên hiển thị (không được chứa `/` hoặc vượt quá 64 ký tự), Hub Port (mặc định: `8443`, phải khớp với `--port`), và Bridge Port (mặc định: `8080`, phải khớp với `--ws-port`). Sau đó nhấp **Connect All**. Client ID và tên hiển thị sẽ được hiển thị khi kết nối. Nếu kết nối bị ngắt, client tự động kết nối lại với exponential backoff (1s → 30s).
 
 #### 4. Gửi Tin nhắn OSC
 

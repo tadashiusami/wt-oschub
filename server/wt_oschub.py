@@ -26,6 +26,8 @@ from aioquic.h3.events import (
 
 logger = logging.getLogger("oschub")
 
+MAX_NAME_LENGTH = 64  # max display name length in characters
+
 def encode_varint(value: int) -> bytes:
     """Encodes an integer as a QUIC/HTTP3 variable-length integer."""
     if value <= 63: return bytes([value])
@@ -62,8 +64,8 @@ def parse_osc_address(data: bytes) -> str:
     except Exception:
         return ''
 
-def rewrite_osc_address(data: bytes, client_id: str, original_address: str) -> bytes:
-    """Rewrites the OSC address to /remote/<client_id>/<original_address>.
+def rewrite_osc_address(data: bytes, sender_name: str, original_address: str) -> bytes:
+    """Rewrites the OSC address to /remote/<sender_name>/<original_address>.
 
     The original address portion (padded to 4-byte boundary) is replaced with
     the new address. All arguments following the address are preserved as-is.
@@ -74,8 +76,8 @@ def rewrite_osc_address(data: bytes, client_id: str, original_address: str) -> b
         orig_len = len(original_address.encode('utf-8')) + 1  # +1 for null terminator
         orig_padded = orig_len + (4 - orig_len % 4) % 4
 
-        # Build new address: /remote/<client_id>/<original_address> (strip leading '/')
-        new_address = f'/remote/{client_id}/{original_address.lstrip("/")}'
+        # Build new address: /remote/<sender_name>/<original_address> (strip leading '/')
+        new_address = f'/remote/{sender_name}/{original_address.lstrip("/")}'
         new_address_bytes = encode_osc_string(new_address)
 
         # Return new address + everything after the original address
@@ -84,7 +86,7 @@ def rewrite_osc_address(data: bytes, client_id: str, original_address: str) -> b
         return data
 
 
-def rewrite_bundle(data: bytes, client_id: str, _depth: int = 0) -> bytes:
+def rewrite_bundle(data: bytes, sender_name: str, _depth: int = 0) -> bytes:
     """Recursively rewrite OSC addresses within an OSC bundle.
 
     Preserves the bundle header (including timetag) and rewrites each
@@ -105,10 +107,10 @@ def rewrite_bundle(data: bytes, client_id: str, _depth: int = 0) -> bytes:
         elem = data[pos:pos + size]
         pos += size
         if elem[:7] == b'#bundle':
-            rewritten_elem = rewrite_bundle(elem, client_id, _depth + 1)
+            rewritten_elem = rewrite_bundle(elem, sender_name, _depth + 1)
         else:
             orig_addr = parse_osc_address(elem)
-            rewritten_elem = rewrite_osc_address(elem, client_id, orig_addr)
+            rewritten_elem = rewrite_osc_address(elem, sender_name, orig_addr)
         result += struct.pack('>I', len(rewritten_elem)) + rewritten_elem
     return result
 
@@ -168,7 +170,16 @@ class OSCHubProtocol(QuicConnectionProtocol):
                 raw_name = params.get('name', [''])[0].strip()
                 display_name = raw_name if raw_name else self.client_id
 
-                # Reject names containing '/' — corrupts OSC address rewriting
+                # Reject names that are too long or contain '/' — corrupts OSC address rewriting
+                if len(display_name) > MAX_NAME_LENGTH:
+                    self._http.send_headers(
+                        stream_id=http_event.stream_id,
+                        headers=[(b":status", b"400")]
+                    )
+                    self.transmit()
+                    logger.warning(f"[!] Rejected name: too long ({len(display_name)} chars, max {MAX_NAME_LENGTH})")
+                    continue
+
                 if '/' in display_name:
                     self._http.send_headers(
                         stream_id=http_event.stream_id,
@@ -331,7 +342,10 @@ class OSCHubProtocol(QuicConnectionProtocol):
             rewritten = rewrite_bundle(data, self.display_name)
         else:
             original_address = parse_osc_address(data)
-            rewritten = rewrite_osc_address(data, self.display_name, original_address)
+            if not original_address:
+                rewritten = data  # non-OSC binary: pass through unchanged
+            else:
+                rewritten = rewrite_osc_address(data, self.display_name, original_address)
 
         clients = self.sessions.get(self.session_id, {})
 

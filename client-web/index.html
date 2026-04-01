@@ -235,6 +235,10 @@
                     addLog(`<span style='color:#ff4444;'>Hub rejected: name already in use in this session.</span>`);
                     document.getElementById('connectBtn').disabled = false;
                     return 'rejected';
+                } else if (msg.includes('400') || msg.includes('503')) {
+                    addLog(`<span style='color:#ff4444;'>Hub rejected connection: ${escapeHtml(msg)}</span>`);
+                    document.getElementById('connectBtn').disabled = false;
+                    return 'rejected';
                 } else {
                     addLog(`Hub connection failed: ${escapeHtml(msg)}`);
                     if (!opts.fromReconnect) {

@@ -39,6 +39,7 @@ LOCAL_OSC_PORT  = args.osc_port
 
 RECONNECT_DELAY_INIT = 1
 RECONNECT_DELAY_MAX  = 30
+MAX_STREAM_BUFFER    = 65536  # bytes; mirrors server-side max_msg_size default
 
 sc_send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
@@ -106,6 +107,9 @@ class WTBridgeProtocol(QuicConnectionProtocol):
             elif isinstance(http_event, WebTransportStreamDataReceived):
                 sid = http_event.stream_id
                 buf = self._stream_buffers.get(sid, b'') + http_event.data
+                if len(buf) > MAX_STREAM_BUFFER:
+                    self._stream_buffers.pop(sid, None)
+                    continue
                 if not http_event.stream_ended:
                     self._stream_buffers[sid] = buf
                     continue
@@ -241,7 +245,10 @@ async def run():
                         print(f"[info] {who} {action}")
                         # fall through to forward to SC
 
-                    sc_send_sock.sendto(data, ("127.0.0.1", SC_RECEIVE_PORT))
+                    try:
+                        sc_send_sock.sendto(data, ("127.0.0.1", SC_RECEIVE_PORT))
+                    except OSError as e:
+                        print(f"[error] UDP send to SC failed: {e}", flush=True)
 
         except KeyboardInterrupt:
             print("Shutting down...")
