@@ -123,7 +123,7 @@ systemctl enable --now wt-oschub.timer
 
 ### B. 会话管理者
 
-将 Web 客户端的 URL 和唯一的会话 ID 分享给所有参与者。
+将 Web 客户端的 URL 和唯一的会话 ID 分享给所有参与者。会话 ID 不得超过 64 个字符。
 
 ### C. 参与者
 
@@ -274,7 +274,7 @@ python local.py your-hub-server.com --session my-session
 
 #### 3. Web 连接
 
-在支持 WebTransport 的浏览器中打开 Web 客户端 URL，输入会话 ID、显示名称（可选，不得包含 `/` 且不超过 64 个字符）、Hub Port（默认值：`8443`，请与 `--port` 保持一致）、Bridge Port（默认值：`8080`，请与 `--ws-port` 保持一致），然后点击 **Connect All**。连接完成后会显示客户端 ID 和显示名称。断线时会以指数退避（1 秒~30 秒）自动重连。
+在支持 WebTransport 的浏览器中打开 Web 客户端 URL，输入会话 ID（不超过 64 个字符）、显示名称（可选，不得包含 `/` 且不超过 64 个字符）、Hub Port（默认值：`8443`，请与 `--port` 保持一致）、Bridge Port（默认值：`8080`，请与 `--ws-port` 保持一致），然后点击 **Connect All**。连接完成后会显示客户端 ID 和显示名称。断线时会以指数退避（1 秒~30 秒）自动重连。
 
 #### 4. 发送 OSC 消息
 

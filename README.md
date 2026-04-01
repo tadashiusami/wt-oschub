@@ -123,7 +123,7 @@ systemctl enable --now wt-oschub.timer
 
 ### B. For the Session Manager
 
-Share the Web Client URL and a unique Session ID with all participants.
+Share the Web Client URL and a unique Session ID with all participants. Session IDs must not exceed 64 characters.
 
 ### C. For Participants
 
@@ -274,7 +274,7 @@ On connect, the console prints your assigned name and ID. OSC routing (datagram 
 
 #### 3. Web Connection
 
-Open the Web Client URL in a WebTransport-capable browser. Enter the Session ID, optionally your display name (must not contain `/` or exceed 64 characters), the Hub Port (default: `8443`, must match `--port`), and the Bridge Port (default: `8080`, must match `--ws-port`). Then click **Connect All**. Your Client ID and display name will be shown once connected. If the connection drops, the client reconnects automatically with exponential backoff (1 s → 30 s).
+Open the Web Client URL in a WebTransport-capable browser. Enter the Session ID (must not exceed 64 characters), optionally your display name (must not contain `/` or exceed 64 characters), the Hub Port (default: `8443`, must match `--port`), and the Bridge Port (default: `8080`, must match `--ws-port`). Then click **Connect All**. Your Client ID and display name will be shown once connected. If the connection drops, the client reconnects automatically with exponential backoff (1 s → 30 s).
 
 #### 4. Sending OSC Messages
 

@@ -123,7 +123,7 @@ systemctl enable --now wt-oschub.timer
 
 ### B. Untuk Session Manager
 
-Bagikan URL Web Client dan Session ID unik kepada semua peserta.
+Bagikan URL Web Client dan Session ID unik kepada semua peserta. ID Session tidak boleh melebihi 64 karakter.
 
 ### C. Untuk Peserta
 
@@ -274,7 +274,7 @@ Setelah terhubung, konsol menampilkan nama dan ID yang ditetapkan. Routing OSC (
 
 #### 3. Koneksi Web
 
-Buka URL Web Client di browser yang mendukung WebTransport. Masukkan Session ID, opsional nama tampilan (tidak boleh mengandung `/` atau melebihi 64 karakter), Hub Port (default: `8443`, harus sesuai dengan `--port`), dan Bridge Port (default: `8080`, harus sesuai dengan `--ws-port`). Kemudian klik **Connect All**. Client ID dan nama tampilan akan ditampilkan setelah terhubung. Jika koneksi terputus, klien secara otomatis terhubung kembali dengan exponential backoff (1d → 30d).
+Buka URL Web Client di browser yang mendukung WebTransport. Masukkan Session ID (tidak boleh melebihi 64 karakter), opsional nama tampilan (tidak boleh mengandung `/` atau melebihi 64 karakter), Hub Port (default: `8443`, harus sesuai dengan `--port`), dan Bridge Port (default: `8080`, harus sesuai dengan `--ws-port`). Kemudian klik **Connect All**. Client ID dan nama tampilan akan ditampilkan setelah terhubung. Jika koneksi terputus, klien secara otomatis terhubung kembali dengan exponential backoff (1d → 30d).
 
 #### 4. Mengirim Pesan OSC
 

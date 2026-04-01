@@ -78,6 +78,24 @@
         let reconnectDelay = 1000;
         const MAX_RECONNECT_DELAY = 30000;
 
+        function decodeVarint(data, pos) {
+            if (pos >= data.length) throw new Error("Buffer too short");
+            const first = data[pos];
+            const prefix = (first & 0xC0) >> 6;
+            if (prefix === 0) return [first & 0x3F, pos + 1];
+            if (prefix === 1) {
+                if (pos + 2 > data.length) throw new Error("Buffer too short");
+                return [((first & 0x3F) << 8) | data[pos + 1], pos + 2];
+            }
+            if (prefix === 2) {
+                if (pos + 4 > data.length) throw new Error("Buffer too short");
+                return [((first & 0x3F) << 24) | (data[pos+1] << 16) | (data[pos+2] << 8) | data[pos+3], pos + 4];
+            }
+            // 8-byte: value exceeds JS safe integer range — skip only
+            if (pos + 8 > data.length) throw new Error("Buffer too short");
+            return [0, pos + 8];
+        }
+
         function escapeHtml(str) {
             return String(str)
                 .replace(/&/g, '&amp;')
@@ -337,12 +355,19 @@
         }
 
         function forwardToBridge(data, type) {
-            // Normalize data for Stream: skip any framing bytes before OSC data.
+            // Strip WebTransport stream header (stream-type varint + session-id varint).
             // OSC data begins with '/' (0x2F, message) or '#' (0x23, bundle header).
             let oscData = data;
             if (type === "Stream") {
-                const start = data.findIndex(b => b === 47 || b === 35);
-                if (start > 0) oscData = data.slice(start);
+                try {
+                    let pos;
+                    [, pos] = decodeVarint(data, 0);   // stream type (e.g. 0x54)
+                    [, pos] = decodeVarint(data, pos);  // session stream ID
+                    oscData = data.slice(pos);
+                } catch (e) {
+                    const start = data.findIndex(b => b === 47 || b === 35);
+                    if (start > 0) oscData = data.slice(start);
+                }
             }
 
             const parsed = parseOscArgs(oscData);

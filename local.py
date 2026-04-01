@@ -64,6 +64,25 @@ def parse_osc_address(data: bytes) -> str:
         return ''
 
 
+def decode_varint(data: bytes, pos: int = 0):
+    """Decode a QUIC variable-length integer at pos. Returns (value, new_pos)."""
+    if pos >= len(data):
+        raise ValueError("Buffer too short")
+    first = data[pos]
+    prefix = (first & 0xC0) >> 6
+    if prefix == 0:
+        return first & 0x3F, pos + 1
+    elif prefix == 1:
+        if pos + 2 > len(data): raise ValueError("Buffer too short")
+        return int.from_bytes(data[pos:pos+2], 'big') & 0x3FFF, pos + 2
+    elif prefix == 2:
+        if pos + 4 > len(data): raise ValueError("Buffer too short")
+        return int.from_bytes(data[pos:pos+4], 'big') & 0x3FFFFFFF, pos + 4
+    else:
+        if pos + 8 > len(data): raise ValueError("Buffer too short")
+        return int.from_bytes(data[pos:pos+8], 'big') & 0x3FFFFFFFFFFFFFFF, pos + 8
+
+
 def parse_osc_strings(data: bytes) -> list:
     """Extract all null-terminated, 4-byte-aligned strings from an OSC message."""
     results, pos = [], 0
@@ -114,9 +133,15 @@ class WTBridgeProtocol(QuicConnectionProtocol):
                     self._stream_buffers[sid] = buf
                     continue
                 self._stream_buffers.pop(sid, None)
-                # Strip any WebTransport framing bytes before the OSC payload
-                start = next((i for i, b in enumerate(buf) if b in (0x2F, 0x23)), 0)
-                self._recv_queue.put_nowait(buf[start:])
+                # Strip WebTransport stream header (stream-type varint + session-id varint)
+                try:
+                    _, p = decode_varint(buf, 0)
+                    _, p = decode_varint(buf, p)
+                    buf = buf[p:]
+                except Exception:
+                    start = next((i for i, b in enumerate(buf) if b in (0x2F, 0x23)), 0)
+                    buf = buf[start:]
+                self._recv_queue.put_nowait(buf)
 
     def establish_session(self, authority: str, path: str):
         """Send HTTP CONNECT to establish a WebTransport session."""

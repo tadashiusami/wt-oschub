@@ -26,7 +26,8 @@ from aioquic.h3.events import (
 
 logger = logging.getLogger("oschub")
 
-MAX_NAME_LENGTH = 64  # max display name length in characters
+MAX_NAME_LENGTH = 64       # max display name length in characters
+MAX_SESSION_ID_LENGTH = 64  # max session ID length in characters
 
 def encode_varint(value: int) -> bytes:
     """Encodes an integer as a QUIC/HTTP3 variable-length integer."""
@@ -149,6 +150,15 @@ class OSCHubProtocol(QuicConnectionProtocol):
                 if not session_id:
                     continue
 
+                if len(session_id) > MAX_SESSION_ID_LENGTH:
+                    self._http.send_headers(
+                        stream_id=http_event.stream_id,
+                        headers=[(b":status", b"400")]
+                    )
+                    self.transmit()
+                    logger.warning(f"[!] Rejected session ID: too long ({len(session_id)} chars, max {MAX_SESSION_ID_LENGTH})")
+                    continue
+
                 self.webtransport_stream_id = http_event.stream_id
 
                 # Generate a unique client ID within the session (max 10 attempts)
@@ -215,7 +225,7 @@ class OSCHubProtocol(QuicConnectionProtocol):
 
                 # Send /welcome with client ID and display name to this client only
                 welcome_msg = build_osc_message('/welcome', self.client_id, self.display_name)
-                self._send_to_self(welcome_msg)
+                self._send_to_self_stream(welcome_msg)
 
                 # Notify existing clients of the new participant
                 join_msg = build_osc_message('/hub/join', self.display_name)
@@ -299,11 +309,13 @@ class OSCHubProtocol(QuicConnectionProtocol):
         return False
 
     def _broadcast_raw(self, data: bytes):
-        """Send raw OSC data (no address rewriting) to all other clients in the session."""
+        """Send raw OSC data (no address rewriting) to all other clients via reliable stream."""
         for client in list(self.sessions.get(self.session_id, {}).values()):
             if client is not self:
                 try:
-                    client._http.send_datagram(client.webtransport_stream_id, data)
+                    out_id = client._quic.get_next_available_stream_id(is_unidirectional=True)
+                    header = encode_varint(0x54) + encode_varint(client.webtransport_stream_id)
+                    client._quic.send_stream_data(stream_id=out_id, data=header + data, end_stream=True)
                     client.transmit()
                 except Exception as e:
                     logger.error(f"Broadcast-raw error: {e}")
@@ -315,6 +327,16 @@ class OSCHubProtocol(QuicConnectionProtocol):
             self.transmit()
         except Exception as e:
             logger.error(f"Send-to-self error: {e}")
+
+    def _send_to_self_stream(self, data: bytes):
+        """Sends an OSC message to this client only via reliable unidirectional stream."""
+        try:
+            out_id = self._quic.get_next_available_stream_id(is_unidirectional=True)
+            header = encode_varint(0x54) + encode_varint(self.webtransport_stream_id)
+            self._quic.send_stream_data(stream_id=out_id, data=header + data, end_stream=True)
+            self.transmit()
+        except Exception as e:
+            logger.error(f"Send-to-self-stream error: {e}")
 
     def _handle_who(self):
         """Replies to the sender with the list of display names in the session."""
@@ -364,6 +386,7 @@ class OSCHubProtocol(QuicConnectionProtocol):
 
     def connection_lost(self, exc):
         """Clean up session data and notify peers when a client disconnects."""
+        self._stream_buffers.clear()
         if self.session_id and self.client_id:
             self.sessions[self.session_id].pop(self.client_id, None)
             remaining = self.sessions.get(self.session_id, {})
@@ -371,7 +394,9 @@ class OSCHubProtocol(QuicConnectionProtocol):
                 leave_msg = build_osc_message('/hub/leave', self.display_name)
                 for client in list(remaining.values()):
                     try:
-                        client._http.send_datagram(client.webtransport_stream_id, leave_msg)
+                        out_id = client._quic.get_next_available_stream_id(is_unidirectional=True)
+                        header = encode_varint(0x54) + encode_varint(client.webtransport_stream_id)
+                        client._quic.send_stream_data(stream_id=out_id, data=header + leave_msg, end_stream=True)
                         client.transmit()
                     except Exception:
                         pass

@@ -123,7 +123,7 @@ systemctl enable --now wt-oschub.timer
 
 ### B. Para sa Session Manager
 
-Ibahagi ang URL ng Web Client at isang natatanging Session ID sa lahat ng kalahok.
+Ibahagi ang URL ng Web Client at isang natatanging Session ID sa lahat ng kalahok. Ang mga Session ID ay hindi dapat lumampas sa 64 na karakter.
 
 ### C. Para sa mga Kalahok
 
@@ -274,7 +274,7 @@ Sa koneksyon, ipinapakita ng console ang iyong itinalaging pangalan at ID. Ang O
 
 #### 3. Koneksyon sa Web
 
-Buksan ang URL ng Web Client sa isang browser na sumusuporta sa WebTransport. Ilagay ang Session ID, opsyonal ang display name (hindi dapat maglaman ng `/` o lumampas sa 64 na karakter), ang Hub Port (default: `8443`, dapat tumugma sa `--port`), at ang Bridge Port (default: `8080`, dapat tumugma sa `--ws-port`). Pagkatapos ay i-click ang **Connect All**. Ang iyong Client ID at display name ay ipapakita kapag nakakonekta na. Kung bumaba ang koneksyon, ang kliyente ay awtomatikong muling kokonekta na may exponential backoff (1s → 30s).
+Buksan ang URL ng Web Client sa isang browser na sumusuporta sa WebTransport. Ilagay ang Session ID (hindi dapat lumampas sa 64 na karakter), opsyonal ang display name (hindi dapat maglaman ng `/` o lumampas sa 64 na karakter), ang Hub Port (default: `8443`, dapat tumugma sa `--port`), at ang Bridge Port (default: `8080`, dapat tumugma sa `--ws-port`). Pagkatapos ay i-click ang **Connect All**. Ang iyong Client ID at display name ay ipapakita kapag nakakonekta na. Kung bumaba ang koneksyon, ang kliyente ay awtomatikong muling kokonekta na may exponential backoff (1s → 30s).
 
 #### 4. Pagpapadala ng OSC Message
 
