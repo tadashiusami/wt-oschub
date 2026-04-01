@@ -119,6 +119,7 @@ class OSCHubProtocol(QuicConnectionProtocol):
     # Configurable limits (set from main() after arg parsing)
     max_msg_size: int = 65536  # bytes
     rate_limit: int = 200      # messages per second per client
+    no_rewrite: bool = False   # set by --no-rewrite flag
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -205,6 +206,10 @@ class OSCHubProtocol(QuicConnectionProtocol):
                 welcome_msg = build_osc_message('/welcome', self.client_id, self.display_name)
                 self._send_to_self(welcome_msg)
 
+                # Notify existing clients of the new participant
+                join_msg = build_osc_message('/hub/join', self.display_name)
+                self._broadcast_raw(join_msg)
+
                 logger.info(f"--- [JOIN] Session: {self.session_id} | ID: {self.client_id} | Name: {self.display_name} ---")
 
             # 2. Handle Datagrams (Low-latency OSC)
@@ -282,6 +287,16 @@ class OSCHubProtocol(QuicConnectionProtocol):
                 return True
         return False
 
+    def _broadcast_raw(self, data: bytes):
+        """Send raw OSC data (no address rewriting) to all other clients in the session."""
+        for client in list(self.sessions.get(self.session_id, {}).values()):
+            if client is not self:
+                try:
+                    client._http.send_datagram(client.webtransport_stream_id, data)
+                    client.transmit()
+                except Exception as e:
+                    logger.error(f"Broadcast-raw error: {e}")
+
     def _send_to_self(self, data: bytes):
         """Sends an OSC message to this client only via Datagram."""
         try:
@@ -304,12 +319,15 @@ class OSCHubProtocol(QuicConnectionProtocol):
 
         The OSC address is rewritten to /remote/<display_name>/<original_address>
         so that recipients can identify the sender and route messages via OSCdef.
+        Rewriting is skipped when --no-rewrite is active.
         """
         if not self.session_id:
             return
 
-        # Rewrite OSC address once for all recipients
-        if data[:7] == b'#bundle':
+        # Rewrite OSC address once for all recipients (unless disabled)
+        if OSCHubProtocol.no_rewrite:
+            rewritten = data
+        elif data[:7] == b'#bundle':
             rewritten = rewrite_bundle(data, self.display_name)
         else:
             original_address = parse_osc_address(data)
@@ -331,10 +349,19 @@ class OSCHubProtocol(QuicConnectionProtocol):
                     logger.error(f"Relay error in session {self.session_id}: {e}")
 
     def connection_lost(self, exc):
-        """Clean up session data when a client disconnects."""
+        """Clean up session data and notify peers when a client disconnects."""
         if self.session_id and self.client_id:
             self.sessions[self.session_id].pop(self.client_id, None)
-            if not self.sessions[self.session_id]:
+            remaining = self.sessions.get(self.session_id, {})
+            if remaining:
+                leave_msg = build_osc_message('/hub/leave', self.display_name)
+                for client in list(remaining.values()):
+                    try:
+                        client._http.send_datagram(client.webtransport_stream_id, leave_msg)
+                        client.transmit()
+                    except Exception:
+                        pass
+            else:
                 del self.sessions[self.session_id]
             logger.info(f"--- [LEAVE] Session: {self.session_id} | ID: {self.client_id} | Name: {self.display_name} ---")
         super().connection_lost(exc)
@@ -349,6 +376,8 @@ async def main():
                         help="Max OSC message size in bytes per message (default: 65536)")
     parser.add_argument("--rate-limit", type=int, default=200,
                         help="Max messages per second per client (default: 200)")
+    parser.add_argument("--no-rewrite", action="store_true",
+                        help="Disable OSC address rewriting (pass frames through verbatim)")
     parser.add_argument("--log-level", default="INFO",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
                         help="Log level (default: INFO)")
@@ -361,7 +390,9 @@ async def main():
 
     OSCHubProtocol.max_msg_size = args.max_msg_size
     OSCHubProtocol.rate_limit = args.rate_limit
-    logger.info(f"Limits: max_msg_size={args.max_msg_size} bytes, rate_limit={args.rate_limit} msg/s")
+    OSCHubProtocol.no_rewrite = args.no_rewrite
+    logger.info(f"Limits: max_msg_size={args.max_msg_size} bytes, rate_limit={args.rate_limit} msg/s"
+                + (" [no-rewrite]" if args.no_rewrite else ""))
 
     configuration = QuicConfiguration(
         is_client=False,

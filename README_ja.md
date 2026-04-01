@@ -5,14 +5,18 @@ WebTransport（HTTP/3）を使用した、SuperCollider 向け低レイテンシ
 ## 特徴
 
 - **ハイブリッドインフラ**: WebTransport 対応ブラウザを中継クライアントとして使用し、Node.js ブリッジで各参加者の SuperCollider 環境と接続します。
+- **Python CLI ブリッジ**: `local.py` を使えば、ブラウザ不要で bridge.js + index.html と同等の接続が Python スクリプト1つで実現できます。
 - **ハイブリッド転送**: 演奏データにはデータグラム（低レイテンシー）、SynthDef・Buffer 転送にはストリーム（信頼性重視）を自動的に使い分けます。
 - **セッション隔離**: セッション ID による複数の独立したセッションを同時に運用できます。
+- **join/leave 通知**: 参加者の入退室時にハブが `/hub/join <name>` および `/hub/leave <name>` をブロードキャストします。
+- **ノーリライトモード**: `--no-rewrite` フラグを使うと OSC アドレスを書き換えずにフレームをそのまま転送します。
 
 ## システムアーキテクチャ
 
 | コンポーネント | 説明 |
 |--------------|------|
 | **ハブサーバー**（`wt_oschub.py`） | クライアント間で OSC を中継する Python サーバー（aioquic） |
+| **Python ブリッジ**（`local.py`） | ブラウザ不要で SC をハブへ直接接続する Python CLI ブリッジ |
 | **ウェブクライアント**（`index.html`） | ハブに接続するブラウザベースのクライアント |
 | **ローカルブリッジ**（`bridge.js`） | SuperCollider（UDP）とウェブクライアント（WebSocket）を接続する Node.js ブリッジ |
 
@@ -25,8 +29,8 @@ WebTransport（HTTP/3）を使用した、SuperCollider 向け低レイテンシ
 
 ### 参加者向け
 - SuperCollider（scsynth をオーディオエンジンとして使用する環境）
-- Node.js（ローカルブリッジ実行用）
-- WebTransport 対応のモダンブラウザ: Chrome 97+、Edge 98+、Firefox 115+、Opera 83+（Safari は現在非対応）
+- **オプション A — Python CLI ブリッジ**（`local.py`）: Python 3.10+ および `pip install aioquic`
+- **オプション B — ブラウザ + Node.js ブリッジ**: Node.js（`bridge.js` 実行用）と WebTransport 対応ブラウザ: Chrome 97+、Edge 98+、Firefox 115+、Opera 83+（Safari は現在非対応）
 
 ## リポジトリ構成
 
@@ -35,9 +39,10 @@ WebTransport（HTTP/3）を使用した、SuperCollider 向け低レイテンシ
 ├── server/
 │   └── wt_oschub.py       # ハブ中継サーバー
 ├── bridge-local/
-│   └── bridge.js          # ローカル UDP-WebSocket ブリッジ
+│   └── bridge.js          # ローカル UDP-WebSocket ブリッジ（オプション B）
 ├── client-web/
-│   └── index.html         # ウェブクライアント（HTML/JS）
+│   └── index.html         # ウェブクライアント（オプション B）
+├── local.py               # Python CLI ブリッジ（オプション A — ブラウザ不要）
 ├── .gitignore
 ├── LICENSE                # GNU GPL v3
 └── README.md
@@ -60,6 +65,7 @@ python wt_oschub.py --cert /path/to/fullchain.pem --key /path/to/privkey.pem
 | オプション | デフォルト | 説明 |
 |-----------|-----------|------|
 | `--port` | 8443 | ハブの待ち受けポート |
+| `--no-rewrite` | — | OSC アドレス書き換えを無効化（フレームをそのまま転送） |
 | `--max-msg-size` | 65536 | メッセージ1件あたりの最大サイズ（バイト） |
 | `--rate-limit` | 200 | クライアントあたりの最大メッセージ数／秒 |
 | `--log-level` | INFO | ログレベル: `DEBUG`、`INFO`、`WARNING`、`ERROR` |
@@ -161,6 +167,16 @@ OSCdef(\remoteSNew, {|msg|
 > ```
 > 各参加者の内部クロック（`thisThread.seconds`）は独立しているため、多少のずれは避けられません。十分に大きな delta（例：5秒）を取ることで、ネットワーク遅延やクロック差を吸収できます。
 
+**ハブシステム通知:** ハブは以下の2つの OSC メッセージをアドレス書き換えなしで全参加者に送信します:
+
+- `/hub/join <name>` — 新しい参加者がセッションに参加したとき
+- `/hub/leave <name>` — 参加者がセッションを退室したとき
+
+```supercollider
+OSCdef(\hubJoin,  { |msg| ("→ " ++ msg[1] ++ " が参加しました").postln }, '/hub/join');
+OSCdef(\hubLeave, { |msg| ("← " ++ msg[1] ++ " が退室しました").postln  }, '/hub/leave');
+```
+
 他の SC 互換環境も使用できます。Python（Supriya）と Clojure（Overtone）の同等のセットアップコード:
 
 **Python (Supriya):**
@@ -223,6 +239,31 @@ node bridge.js
 | `--sc-port` | 57120 | SC/sclang が OSC を受信するポート |
 | `--osc-port` | 57121 | ブリッジが SC からの OSC を受け付けるローカル UDP ポート |
 | `--ws-port` | 8080 | ブリッジがブラウザに公開する WebSocket ポート |
+
+#### 代替手段: Python CLI ブリッジ（local.py）
+
+`local.py` は bridge.js と index.html の両方を Python スクリプト1つで置き換えます。ブラウザや Node.js は不要です。
+
+```bash
+pip install aioquic
+python local.py your-hub-server.com --session my-session
+```
+
+オプション:
+
+| オプション | デフォルト | 説明 |
+|-----------|-----------|------|
+| `server` | （必須） | ハブサーバーのホスト名 |
+| `--port` | 8443 | ハブサーバーのポート |
+| `--sc-port` | 57120 | SC の受信ポート |
+| `--osc-port` | 57121 | ローカル OSC 受信ポート |
+| `--session` | （プロンプト） | 参加するセッション ID |
+| `--name` | （任意） | 表示名 |
+| `--insecure` | — | TLS 証明書の検証を無効化（自己署名証明書用） |
+
+接続が完了すると、割り当てられた名前と ID がコンソールに表示されます。接続が切断された場合は指数バックオフ（1秒〜30秒）で自動再接続します。
+
+> **注意:** `local.py` を使用する場合、OSC の送信先はブリッジポート 57121 です。SC では `~bridge = NetAddr("127.0.0.1", 57121)` と設定してください（bridge.js の場合と同じです）。
 
 #### 3. ウェブ接続
 

@@ -5,14 +5,18 @@ A low-latency, bidirectional OSC relay system for SuperCollider using WebTranspo
 ## Features
 
 - **Hybrid Infrastructure**: Relays data via a WebTransport-capable browser, using a Node.js bridge to integrate each participant's SuperCollider environment.
+- **Python CLI Bridge**: `local.py` provides the same connection as bridge.js + browser in a single Python script — no browser required.
 - **Hybrid Transport**: Automatically switches between Datagrams (for high-speed performance data) and Streams (for reliable SynthDef/Buffer transfers).
 - **Session Isolation**: Supports multiple independent sessions using Session IDs.
+- **Join/Leave Notifications**: Hub broadcasts `/hub/join <name>` and `/hub/leave <name>` when participants enter or exit a session.
+- **No-Rewrite Mode**: `--no-rewrite` flag passes OSC frames verbatim without address rewriting.
 
 ## System Architecture
 
 | Component | Description |
 |-----------|-------------|
 | **Hub Server** (`wt_oschub.py`) | A Python server (aioquic) that relays OSC between clients |
+| **Python Bridge** (`local.py`) | A Python CLI bridge — connects SC directly to the Hub (no browser needed) |
 | **Web Client** (`index.html`) | A browser-based transport that connects to the Hub |
 | **Local Bridge** (`bridge.js`) | A Node.js bridge connecting SuperCollider (UDP) and the Web Client (WebSocket) |
 
@@ -25,8 +29,8 @@ A low-latency, bidirectional OSC relay system for SuperCollider using WebTranspo
 
 ### For Participants
 - SuperCollider (any environment using scsynth as the audio engine)
-- Node.js (for running the local bridge)
-- Modern web browser with WebTransport support: Chrome 97+, Edge 98+, Firefox 115+, Opera 83+ (Safari is not currently supported)
+- **Option A — Python CLI Bridge** (`local.py`): Python 3.10+ and `pip install aioquic`
+- **Option B — Browser + Node.js Bridge**: Node.js (for `bridge.js`) and a WebTransport-capable browser: Chrome 97+, Edge 98+, Firefox 115+, Opera 83+ (Safari is not currently supported)
 
 ## Repository Structure
 
@@ -35,9 +39,10 @@ A low-latency, bidirectional OSC relay system for SuperCollider using WebTranspo
 ├── server/
 │   └── wt_oschub.py       # Hub relay server
 ├── bridge-local/
-│   └── bridge.js          # Local UDP-WebSocket bridge
+│   └── bridge.js          # Local UDP-WebSocket bridge (Option B)
 ├── client-web/
-│   └── index.html         # Web client interface (HTML/JS)
+│   └── index.html         # Web client interface (Option B)
+├── local.py               # Python CLI bridge (Option A — no browser needed)
 ├── .gitignore             # Git ignore settings
 ├── LICENSE                # GNU GPL v3 License
 └── README.md              # Project documentation
@@ -60,6 +65,7 @@ Additional options (all optional):
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--port` | 8443 | Hub listen port |
+| `--no-rewrite` | — | Disable OSC address rewriting (pass frames verbatim) |
 | `--max-msg-size` | 65536 | Max OSC message size in bytes per message |
 | `--rate-limit` | 200 | Max messages per second per client |
 | `--log-level` | INFO | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
@@ -161,6 +167,16 @@ OSCdef(\remoteSNew, {|msg|
 > ```
 > Since each participant's internal clock (`thisThread.seconds`) is independent, some drift is inevitable. Taking a sufficiently large delta (e.g. 5 seconds) helps absorb network latency and clock differences.
 
+**Hub system notifications:** The hub sends two OSC messages that are delivered directly (not address-rewritten) to all participants:
+
+- `/hub/join <name>` — sent when a new participant joins the session
+- `/hub/leave <name>` — sent when a participant leaves
+
+```supercollider
+OSCdef(\hubJoin,  { |msg| ("→ " ++ msg[1] ++ " joined").postln }, '/hub/join');
+OSCdef(\hubLeave, { |msg| ("← " ++ msg[1] ++ " left").postln  }, '/hub/leave');
+```
+
 You can also use other SC-compatible environments. Equivalent setup code for Python (Supriya) and Clojure (Overtone):
 
 **Python (Supriya):**
@@ -223,6 +239,31 @@ Options (all optional, defaults shown):
 | `--sc-port` | 57120 | Port where SC/sclang receives OSC |
 | `--osc-port` | 57121 | Local UDP port the bridge listens on for OSC from SC |
 | `--ws-port` | 8080 | WebSocket port the bridge exposes to the browser |
+
+#### Alternative: Python CLI Bridge (local.py)
+
+`local.py` replaces both bridge.js and index.html in a single Python script. No browser or Node.js is required.
+
+```bash
+pip install aioquic
+python local.py your-hub-server.com --session my-session
+```
+
+Options:
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `server` | *(required)* | Hub server hostname |
+| `--port` | 8443 | Hub server port |
+| `--sc-port` | 57120 | SC receive port |
+| `--osc-port` | 57121 | Local OSC receive port |
+| `--session` | *(prompted)* | Session ID to join |
+| `--name` | *(optional)* | Your display name |
+| `--insecure` | — | Disable TLS certificate verification (for self-signed certs) |
+
+On connect, the console prints your assigned name and ID. OSC routing (datagram vs. stream) follows the same rules as the browser client. If the connection drops, the bridge reconnects automatically with exponential backoff (1 s → 30 s).
+
+> **Note:** When using `local.py`, send OSC to port 57121 (the `--osc-port`) instead of using the browser. Set `~bridge = NetAddr("127.0.0.1", 57121)` in SC as you would with bridge.js.
 
 #### 3. Web Connection
 
