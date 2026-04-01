@@ -5,16 +5,27 @@
 ## 特性
 
 - **混合基础架构**: 以支持 WebTransport 的浏览器作为中继客户端，通过 Node.js 桥接连接各参与者的 SuperCollider 环境。
+- **Python CLI 桥接**: `local.py` 以单个 Python 脚本实现与 bridge.js + 浏览器相同的连接——无需浏览器。
 - **混合传输**: 演奏数据自动使用数据报（低延迟），SynthDef·Buffer 传输使用流（注重可靠性）。
 - **会话隔离**: 通过会话 ID 可同时运行多个独立会话。
+- **加入/退出通知**: 当参与者进入或退出会话时，Hub 广播 `/hub/join <name>` 和 `/hub/leave <name>`。
+- **无改写模式**: `--no-rewrite` 标志使 OSC 帧不经地址改写直接传递。
 
 ## 系统架构
 
 | 组件 | 说明 |
 |------|------|
 | **Hub 服务器**（`wt_oschub.py`） | 在客户端之间中继 OSC 的 Python 服务器（aioquic） |
+| **Python 桥接**（`local.py`） | 无需浏览器即可将 SC 直接连接到 Hub 的 Python CLI 桥接 |
 | **Web 客户端**（`index.html`） | 连接到 Hub 的基于浏览器的客户端 |
 | **本地桥接**（`bridge.js`） | 连接 SuperCollider（UDP）与 Web 客户端（WebSocket）的 Node.js 桥接 |
+
+## 演示
+
+公开演示 Hub 可在 `connect.oschub.asia`（端口 `8443`）访问。请注意，该服务器可能并非始终可用。
+
+- **Web 客户端**：在支持 WebTransport 的浏览器中打开 [https://connect.oschub.asia/](https://connect.oschub.asia/)
+- **Python CLI 桥接**：`python local.py connect.oschub.asia --session your-session`
 
 ## 前提条件
 
@@ -25,8 +36,8 @@
 
 ### 参与者
 - SuperCollider（使用 scsynth 作为音频引擎的环境）
-- Node.js（用于运行本地桥接）
-- 支持 WebTransport 的现代浏览器：Chrome 97+、Edge 98+、Firefox 115+、Opera 83+（Safari 暂不支持）
+- **选项 A — Python CLI 桥接**（`local.py`）：Python 3.10+ 及 `pip install aioquic`
+- **选项 B — 浏览器 + Node.js 桥接**：Node.js（用于运行 `bridge.js`）及支持 WebTransport 的浏览器：Chrome 97+、Edge 98+、Firefox 115+、Opera 83+（Safari 暂不支持）
 
 ## 仓库结构
 
@@ -35,9 +46,10 @@
 ├── server/
 │   └── wt_oschub.py       # Hub 中继服务器
 ├── bridge-local/
-│   └── bridge.js          # 本地 UDP-WebSocket 桥接
+│   └── bridge.js          # 本地 UDP-WebSocket 桥接（选项 B）
 ├── client-web/
-│   └── index.html         # Web 客户端（HTML/JS）
+│   └── index.html         # Web 客户端（选项 B）
+├── local.py               # Python CLI 桥接（选项 A — 无需浏览器）
 ├── .gitignore
 ├── LICENSE                # GNU GPL v3
 └── README.md
@@ -60,6 +72,7 @@ python wt_oschub.py --cert /path/to/fullchain.pem --key /path/to/privkey.pem
 | 选项 | 默认值 | 说明 |
 |------|--------|------|
 | `--port` | 8443 | Hub 监听端口 |
+| `--no-rewrite` | — | 禁用 OSC 地址改写（直接传递帧） |
 | `--max-msg-size` | 65536 | 每条消息的最大字节数 |
 | `--rate-limit` | 200 | 每个客户端每秒最大消息数 |
 | `--log-level` | INFO | 日志级别：`DEBUG`、`INFO`、`WARNING`、`ERROR` |
@@ -161,6 +174,16 @@ OSCdef(\remoteSNew, {|msg|
 > ```
 > 各参与者的内部时钟（`thisThread.seconds`）是独立的，因此难免存在一定误差。使用足够大的 delta（例如 5 秒）可以吸收网络延迟和时钟差异。
 
+**Hub 系统通知：** Hub 会将以下两条 OSC 消息不经地址改写直接发送给所有参与者：
+
+- `/hub/join <name>` — 新参与者加入会话时发送
+- `/hub/leave <name>` — 参与者离开会话时发送
+
+```supercollider
+OSCdef(\hubJoin,  { |msg| ("→ " ++ msg[1] ++ " 加入").postln }, '/hub/join');
+OSCdef(\hubLeave, { |msg| ("← " ++ msg[1] ++ " 离开").postln  }, '/hub/leave');
+```
+
 也可以使用其他兼容 SC 的环境。Python（Supriya）和 Clojure（Overtone）的等效设置代码：
 
 **Python (Supriya):**
@@ -223,6 +246,31 @@ node bridge.js
 | `--sc-port` | 57120 | SC/sclang 接收 OSC 的端口 |
 | `--osc-port` | 57121 | 桥接接收来自 SC 的 OSC 的本地 UDP 端口 |
 | `--ws-port` | 8080 | 桥接向浏览器公开的 WebSocket 端口 |
+
+#### 替代方案：Python CLI 桥接（local.py）
+
+`local.py` 以单个 Python 脚本同时替代 bridge.js 和 index.html。无需浏览器或 Node.js。
+
+```bash
+pip install aioquic
+python local.py your-hub-server.com --session my-session
+```
+
+选项：
+
+| 选项 | 默认值 | 说明 |
+|------|--------|------|
+| `server` | （必须） | Hub 服务器主机名 |
+| `--port` | 8443 | Hub 服务器端口 |
+| `--sc-port` | 57120 | SC 接收端口 |
+| `--osc-port` | 57121 | 本地 OSC 接收端口 |
+| `--session` | （提示输入） | 要加入的会话 ID |
+| `--name` | （可选） | 显示名称 |
+| `--insecure` | — | 禁用 TLS 证书验证（用于自签名证书） |
+
+连接完成后，控制台将显示分配的名称和 ID。OSC 路由（数据报或流）遵循与浏览器客户端相同的规则。如果连接断开，桥接将以指数退避（1 秒~30 秒）自动重连。
+
+> **注意：** 使用 `local.py` 时，请将 OSC 发送到端口 57121（`--osc-port`）而非通过浏览器。在 SC 中设置 `~bridge = NetAddr("127.0.0.1", 57121)`（与 bridge.js 用法相同）。
 
 #### 3. Web 连接
 

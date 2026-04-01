@@ -20,6 +20,13 @@ A low-latency, bidirectional OSC relay system for SuperCollider using WebTranspo
 | **Web Client** (`index.html`) | A browser-based transport that connects to the Hub |
 | **Local Bridge** (`bridge.js`) | A Node.js bridge connecting SuperCollider (UDP) and the Web Client (WebSocket) |
 
+## Demo
+
+A public demo Hub is available at `connect.oschub.asia` (port `8443`). Note that this server may not always be accessible.
+
+- **Web Client**: Open [https://connect.oschub.asia/](https://connect.oschub.asia/) in a WebTransport-capable browser
+- **Python CLI Bridge**: `python local.py connect.oschub.asia --session your-session`
+
 ## Prerequisites
 
 ### For Hub Operators

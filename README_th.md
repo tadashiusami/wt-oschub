@@ -5,16 +5,27 @@
 ## คุณสมบัติ
 
 - **โครงสร้างพื้นฐาน Hybrid**: ส่งต่อข้อมูลผ่านเบราว์เซอร์ที่รองรับ WebTransport โดยใช้ Node.js bridge เพื่อรวมสภาพแวดล้อม SuperCollider ของผู้เข้าร่วมแต่ละคน
+- **Python CLI Bridge**: `local.py` ให้การเชื่อมต่อแบบเดียวกับ bridge.js + เบราว์เซอร์ในสคริปต์ Python เดียว — ไม่ต้องใช้เบราว์เซอร์
 - **การส่งข้อมูล Hybrid**: สลับโดยอัตโนมัติระหว่าง Datagram (สำหรับข้อมูลการแสดงความเร็วสูง) และ Stream (สำหรับการถ่ายโอน SynthDef/Buffer ที่เชื่อถือได้)
 - **การแยกเซสชัน**: รองรับหลายเซสชันที่เป็นอิสระโดยใช้ Session ID
+- **การแจ้งเตือนการเข้า/ออก**: Hub บรอดแคสต์ `/hub/join <name>` และ `/hub/leave <name>` เมื่อผู้เข้าร่วมเข้าหรือออกจากเซสชัน
+- **โหมดไม่เขียนใหม่**: Flag `--no-rewrite` ส่ง OSC frame แบบ verbatim โดยไม่เขียนที่อยู่ใหม่
 
 ## สถาปัตยกรรมระบบ
 
 | ส่วนประกอบ | คำอธิบาย |
 |-----------|---------|
 | **Hub Server** (`wt_oschub.py`) | Python server (aioquic) ที่ relay OSC ระหว่างไคลเอนต์ |
+| **Python Bridge** (`local.py`) | Python CLI bridge — เชื่อมต่อ SC โดยตรงกับ Hub (ไม่ต้องใช้เบราว์เซอร์) |
 | **Web Client** (`index.html`) | Transport ที่ใช้เบราว์เซอร์เชื่อมต่อกับ Hub |
 | **Local Bridge** (`bridge.js`) | Node.js bridge ที่เชื่อมต่อ SuperCollider (UDP) และ Web Client (WebSocket) |
+
+## เดโม
+
+Hub เดโมสาธารณะพร้อมใช้งานที่ `connect.oschub.asia` (พอร์ต `8443`) โปรดทราบว่าเซิร์ฟเวอร์นี้อาจไม่พร้อมใช้งานตลอดเวลา
+
+- **เว็บไคลเอนต์**: เปิด [https://connect.oschub.asia/](https://connect.oschub.asia/) ในเบราว์เซอร์ที่รองรับ WebTransport
+- **Python CLI Bridge**: `python local.py connect.oschub.asia --session your-session`
 
 ## ข้อกำหนดเบื้องต้น
 
@@ -25,8 +36,8 @@
 
 ### สำหรับผู้เข้าร่วม
 - SuperCollider (สภาพแวดล้อมใดก็ได้ที่ใช้ scsynth เป็น audio engine)
-- Node.js (สำหรับรัน local bridge)
-- เว็บเบราว์เซอร์สมัยใหม่ที่รองรับ WebTransport: Chrome 97+, Edge 98+, Firefox 115+, Opera 83+ (Safari ยังไม่รองรับในขณะนี้)
+- **ตัวเลือก A — Python CLI Bridge** (`local.py`): Python 3.10+ และ `pip install aioquic`
+- **ตัวเลือก B — เบราว์เซอร์ + Node.js Bridge**: Node.js (สำหรับ `bridge.js`) และเว็บเบราว์เซอร์ที่รองรับ WebTransport: Chrome 97+, Edge 98+, Firefox 115+, Opera 83+ (Safari ยังไม่รองรับในขณะนี้)
 
 ## โครงสร้าง Repository
 
@@ -35,9 +46,10 @@
 ├── server/
 │   └── wt_oschub.py       # Hub relay server
 ├── bridge-local/
-│   └── bridge.js          # Local UDP-WebSocket bridge
+│   └── bridge.js          # Local UDP-WebSocket bridge (ตัวเลือก B)
 ├── client-web/
-│   └── index.html         # Web client interface (HTML/JS)
+│   └── index.html         # Web client interface (ตัวเลือก B)
+├── local.py               # Python CLI bridge (ตัวเลือก A — ไม่ต้องใช้เบราว์เซอร์)
 ├── .gitignore
 ├── LICENSE                # GNU GPL v3
 └── README.md
@@ -60,6 +72,7 @@ python wt_oschub.py --cert /path/to/fullchain.pem --key /path/to/privkey.pem
 | ตัวเลือก | ค่าเริ่มต้น | คำอธิบาย |
 |---------|------------|---------|
 | `--port` | 8443 | พอร์ตที่ฮับรับฟัง |
+| `--no-rewrite` | — | ปิดการเขียนที่อยู่ OSC ใหม่ (ส่ง frame แบบ verbatim) |
 | `--max-msg-size` | 65536 | ขนาดข้อความ OSC สูงสุดเป็นไบต์ต่อข้อความ |
 | `--rate-limit` | 200 | จำนวนข้อความสูงสุดต่อวินาทีต่อไคลเอนต์ |
 | `--log-level` | INFO | ระดับ log: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
@@ -161,6 +174,16 @@ OSCdef(\remoteSNew, {|msg|
 > ```
 > เนื่องจากนาฬิกาภายในของผู้เข้าร่วมแต่ละคน (`thisThread.seconds`) เป็นอิสระ drift บางส่วนจึงหลีกเลี่ยงไม่ได้ การใช้ delta ที่ใหญ่พอ (เช่น 5 วินาที) ช่วยดูดซับความหน่วงของเครือข่ายและความแตกต่างของนาฬิกา
 
+**การแจ้งเตือนระบบ hub:** Hub ส่งข้อความ OSC สองรายการต่อไปนี้โดยตรง (ไม่เขียนที่อยู่ใหม่) ไปยังผู้เข้าร่วมทุกคน:
+
+- `/hub/join <name>` — ส่งเมื่อผู้เข้าร่วมใหม่เข้าร่วมเซสชัน
+- `/hub/leave <name>` — ส่งเมื่อผู้เข้าร่วมออกจากเซสชัน
+
+```supercollider
+OSCdef(\hubJoin,  { |msg| ("→ " ++ msg[1] ++ " เข้าร่วมแล้ว").postln }, '/hub/join');
+OSCdef(\hubLeave, { |msg| ("← " ++ msg[1] ++ " ออกไปแล้ว").postln  }, '/hub/leave');
+```
+
 คุณยังสามารถใช้สภาพแวดล้อมที่ใช้งานร่วมกับ SC ได้ รหัสตั้งค่าที่เทียบเท่าสำหรับ Python (Supriya) และ Clojure (Overtone):
 
 **Python (Supriya):**
@@ -223,6 +246,31 @@ node bridge.js
 | `--sc-port` | 57120 | พอร์ตที่ SC/sclang รับ OSC |
 | `--osc-port` | 57121 | พอร์ต UDP ในเครื่องที่ bridge รับฟัง OSC จาก SC |
 | `--ws-port` | 8080 | พอร์ต WebSocket ที่ bridge เปิดเผยให้เบราว์เซอร์ |
+
+#### ทางเลือก: Python CLI Bridge (local.py)
+
+`local.py` แทนที่ทั้ง bridge.js และ index.html ในสคริปต์ Python เดียว ไม่ต้องใช้เบราว์เซอร์หรือ Node.js
+
+```bash
+pip install aioquic
+python local.py your-hub-server.com --session my-session
+```
+
+ตัวเลือก:
+
+| ตัวเลือก | ค่าเริ่มต้น | คำอธิบาย |
+|---------|------------|---------|
+| `server` | *(จำเป็น)* | ชื่อโฮสต์ของ hub server |
+| `--port` | 8443 | พอร์ตของ hub server |
+| `--sc-port` | 57120 | พอร์ตรับของ SC |
+| `--osc-port` | 57121 | พอร์ตรับ OSC ในเครื่อง |
+| `--session` | *(ถูกถาม)* | Session ID ที่ต้องการเข้าร่วม |
+| `--name` | *(ทางเลือก)* | ชื่อที่แสดงของคุณ |
+| `--insecure` | — | ปิดการตรวจสอบใบรับรอง TLS (สำหรับใบรับรองที่เซ็นเอง) |
+
+เมื่อเชื่อมต่อแล้ว คอนโซลจะแสดงชื่อและ ID ที่ได้รับมอบหมาย การ routing OSC (datagram หรือ stream) ตามกฎเดียวกับ browser client หากการเชื่อมต่อขาดหาย bridge จะเชื่อมต่อใหม่โดยอัตโนมัติด้วย exponential backoff (1s → 30s)
+
+> **หมายเหตุ:** เมื่อใช้ `local.py` ให้ส่ง OSC ไปยังพอร์ต 57121 (`--osc-port`) แทนการใช้เบราว์เซอร์ ตั้งค่า `~bridge = NetAddr("127.0.0.1", 57121)` ใน SC เหมือนกับ bridge.js
 
 #### 3. การเชื่อมต่อเว็บ
 

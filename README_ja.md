@@ -20,6 +20,13 @@ WebTransport（HTTP/3）を使用した、SuperCollider 向け低レイテンシ
 | **ウェブクライアント**（`index.html`） | ハブに接続するブラウザベースのクライアント |
 | **ローカルブリッジ**（`bridge.js`） | SuperCollider（UDP）とウェブクライアント（WebSocket）を接続する Node.js ブリッジ |
 
+## デモ
+
+公開デモ Hub が `connect.oschub.asia`（ポート `8443`）で利用できます。このサーバーは常時利用できるとは限りません。
+
+- **ウェブクライアント**: WebTransport 対応ブラウザで [https://connect.oschub.asia/](https://connect.oschub.asia/) を開く
+- **Python CLI ブリッジ**: `python local.py connect.oschub.asia --session your-session`
+
 ## 前提条件
 
 ### ハブ運営者向け

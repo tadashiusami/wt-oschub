@@ -5,16 +5,27 @@ Isang mababa ang latency, bidirectional na sistema ng OSC relay para sa SuperCol
 ## Mga Katangian
 
 - **Hybrid na Imprastraktura**: Nagre-relay ng data sa pamamagitan ng browser na sumusuporta sa WebTransport, gamit ang Node.js bridge para isama ang SuperCollider environment ng bawat kalahok.
+- **Python CLI Bridge**: Ang `local.py` ay nagbibigay ng parehong koneksyon tulad ng bridge.js + browser sa isang Python script — hindi kailangan ng browser.
 - **Hybrid na Transportasyon**: Awtomatikong nagpapalit sa pagitan ng Datagram (para sa mabilis na performance data) at Stream (para sa maaasahang paglipat ng SynthDef/Buffer).
 - **Paghihiwalay ng Session**: Sinusuportahan ang maraming independyenteng session gamit ang mga Session ID.
+- **Mga Abiso sa Pagsali/Pag-alis**: Nagbo-broadcast ang Hub ng `/hub/join <name>` at `/hub/leave <name>` kapag ang mga kalahok ay pumapasok o umaalis sa session.
+- **No-Rewrite Mode**: Ang flag na `--no-rewrite` ay nagpapasa ng mga OSC frame nang verbatim nang hindi nirewrite ang address.
 
 ## Arkitektura ng Sistema
 
 | Bahagi | Paglalarawan |
 |--------|-------------|
 | **Hub Server** (`wt_oschub.py`) | Python server (aioquic) na nagre-relay ng OSC sa pagitan ng mga kliyente |
+| **Python Bridge** (`local.py`) | Python CLI bridge — direktang kumokonekta ng SC sa Hub (hindi kailangan ng browser) |
 | **Web Client** (`index.html`) | Browser-based na transportasyon na kumokonekta sa Hub |
 | **Local Bridge** (`bridge.js`) | Node.js bridge na nag-uugnay ng SuperCollider (UDP) at Web Client (WebSocket) |
+
+## Demo
+
+Ang pampublikong demo Hub ay available sa `connect.oschub.asia` (port `8443`). Tandaan na ang server na ito ay maaaring hindi laging accessible.
+
+- **Web Client**: Buksan ang [https://connect.oschub.asia/](https://connect.oschub.asia/) sa isang browser na sumusuporta sa WebTransport
+- **Python CLI Bridge**: `python local.py connect.oschub.asia --session your-session`
 
 ## Mga Kinakailangan
 
@@ -25,8 +36,8 @@ Isang mababa ang latency, bidirectional na sistema ng OSC relay para sa SuperCol
 
 ### Para sa mga Kalahok
 - SuperCollider (anumang kapaligiran na gumagamit ng scsynth bilang audio engine)
-- Node.js (para sa pagpapatakbo ng lokal na bridge)
-- Modernong web browser na may suporta sa WebTransport: Chrome 97+, Edge 98+, Firefox 115+, Opera 83+ (Hindi kasalukuyang sinusuportahan ng Safari)
+- **Opsyon A — Python CLI Bridge** (`local.py`): Python 3.10+ at `pip install aioquic`
+- **Opsyon B — Browser + Node.js Bridge**: Node.js (para sa `bridge.js`) at browser na may suporta sa WebTransport: Chrome 97+, Edge 98+, Firefox 115+, Opera 83+ (Hindi kasalukuyang sinusuportahan ng Safari)
 
 ## Istraktura ng Repository
 
@@ -35,9 +46,10 @@ Isang mababa ang latency, bidirectional na sistema ng OSC relay para sa SuperCol
 ├── server/
 │   └── wt_oschub.py       # Hub relay server
 ├── bridge-local/
-│   └── bridge.js          # Lokal na UDP-WebSocket bridge
+│   └── bridge.js          # Lokal na UDP-WebSocket bridge (Opsyon B)
 ├── client-web/
-│   └── index.html         # Web client interface (HTML/JS)
+│   └── index.html         # Web client interface (Opsyon B)
+├── local.py               # Python CLI bridge (Opsyon A — hindi kailangan ng browser)
 ├── .gitignore
 ├── LICENSE                # GNU GPL v3
 └── README.md
@@ -60,6 +72,7 @@ Karagdagang mga opsyon (lahat ay opsyonal):
 | Opsyon | Default | Paglalarawan |
 |--------|---------|-------------|
 | `--port` | 8443 | Port na pinakikinggan ng hub |
+| `--no-rewrite` | — | I-disable ang OSC address rewriting (ipasa nang verbatim ang mga frame) |
 | `--max-msg-size` | 65536 | Max na laki ng OSC mensahe sa bytes bawat mensahe |
 | `--rate-limit` | 200 | Max na mensahe bawat segundo bawat kliyente |
 | `--log-level` | INFO | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
@@ -161,6 +174,16 @@ OSCdef(\remoteSNew, {|msg|
 > ```
 > Dahil ang panloob na orasan ng bawat kalahok (`thisThread.seconds`) ay independyente, ang ilang drift ay hindi maiiwasan. Ang paggamit ng sapat na malaking delta (hal. 5 segundo) ay tumutulong na masipsip ang network latency at pagkakaiba ng orasan.
 
+**Mga abiso ng sistema ng hub:** Nagpapadala ang hub ng dalawang mensaheng OSC na direktang (hindi nirewrite ang address) ipinapadala sa lahat ng kalahok:
+
+- `/hub/join <name>` — ipinadala kapag ang isang bagong kalahok ay sumali sa session
+- `/hub/leave <name>` — ipinadala kapag ang isang kalahok ay umalis sa session
+
+```supercollider
+OSCdef(\hubJoin,  { |msg| ("→ " ++ msg[1] ++ " sumali").postln }, '/hub/join');
+OSCdef(\hubLeave, { |msg| ("← " ++ msg[1] ++ " umalis").postln  }, '/hub/leave');
+```
+
 Maaari ka ring gumamit ng iba pang SC-compatible na kapaligiran. Katumbas na setup code para sa Python (Supriya) at Clojure (Overtone):
 
 **Python (Supriya):**
@@ -223,6 +246,31 @@ Mga opsyon (lahat ay opsyonal, mga default na value ay ipinapakita):
 | `--sc-port` | 57120 | Port kung saan tumatanggap ng OSC ang SC/sclang |
 | `--osc-port` | 57121 | Lokal na UDP port na pinakikinggan ng bridge para sa OSC mula sa SC |
 | `--ws-port` | 8080 | WebSocket port na inilalantad ng bridge sa browser |
+
+#### Alternatibo: Python CLI Bridge (local.py)
+
+Pinapalitan ng `local.py` ang parehong bridge.js at index.html sa isang Python script. Hindi kailangan ng browser o Node.js.
+
+```bash
+pip install aioquic
+python local.py your-hub-server.com --session my-session
+```
+
+Mga opsyon:
+
+| Opsyon | Default | Paglalarawan |
+|--------|---------|-------------|
+| `server` | *(kinakailangan)* | Hostname ng hub server |
+| `--port` | 8443 | Port ng hub server |
+| `--sc-port` | 57120 | Port na tinatanggap ng SC |
+| `--osc-port` | 57121 | Lokal na port na tinatanggap ng OSC |
+| `--session` | *(tinanong)* | ID ng session na sasalihan |
+| `--name` | *(opsyonal)* | Iyong display name |
+| `--insecure` | — | I-disable ang TLS certificate verification (para sa self-signed na certificate) |
+
+Sa koneksyon, ipinapakita ng console ang iyong itinalaging pangalan at ID. Ang OSC routing (datagram kumpara sa stream) ay sumusunod sa parehong mga patakaran tulad ng browser client. Kung bumaba ang koneksyon, awtomatikong muling kokonekta ang bridge na may exponential backoff (1s → 30s).
+
+> **Tandaan:** Kapag gumagamit ng `local.py`, magpadala ng OSC sa port 57121 (ang `--osc-port`) sa halip na gamitin ang browser. Itakda ang `~bridge = NetAddr("127.0.0.1", 57121)` sa SC tulad ng gagawin mo sa bridge.js.
 
 #### 3. Koneksyon sa Web
 

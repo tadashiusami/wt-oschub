@@ -5,16 +5,27 @@ Sistem relay OSC dua arah, latensi rendah untuk SuperCollider menggunakan WebTra
 ## Fitur
 
 - **Infrastruktur Hybrid**: Merelay data melalui browser yang mendukung WebTransport, menggunakan Node.js bridge untuk mengintegrasikan lingkungan SuperCollider setiap peserta.
+- **Python CLI Bridge**: `local.py` menyediakan koneksi yang sama seperti bridge.js + browser dalam satu skrip Python — tanpa browser.
 - **Transmisi Hybrid**: Secara otomatis beralih antara Datagram (untuk data performa berkecepatan tinggi) dan Stream (untuk transfer SynthDef/Buffer yang andal).
 - **Isolasi Session**: Mendukung beberapa session independen menggunakan Session ID.
+- **Notifikasi Bergabung/Keluar**: Hub menyiarkan `/hub/join <name>` dan `/hub/leave <name>` ketika peserta masuk atau keluar dari session.
+- **Mode Tanpa-Penulisan-Ulang**: Flag `--no-rewrite` meneruskan frame OSC apa adanya tanpa penulisan ulang alamat.
 
 ## Arsitektur Sistem
 
 | Komponen | Deskripsi |
 |---------|-----------|
 | **Hub Server** (`wt_oschub.py`) | Server Python (aioquic) yang merelay OSC antar klien |
+| **Python Bridge** (`local.py`) | Python CLI bridge — menghubungkan SC langsung ke Hub (tanpa browser) |
 | **Web Client** (`index.html`) | Transport berbasis browser yang terhubung ke Hub |
 | **Local Bridge** (`bridge.js`) | Node.js bridge yang menghubungkan SuperCollider (UDP) dan Web Client (WebSocket) |
+
+## Demo
+
+Hub demo publik tersedia di `connect.oschub.asia` (port `8443`). Perlu diperhatikan bahwa server ini mungkin tidak selalu dapat diakses.
+
+- **Web Client**: Buka [https://connect.oschub.asia/](https://connect.oschub.asia/) di browser yang mendukung WebTransport
+- **Python CLI Bridge**: `python local.py connect.oschub.asia --session your-session`
 
 ## Prasyarat
 
@@ -25,8 +36,8 @@ Sistem relay OSC dua arah, latensi rendah untuk SuperCollider menggunakan WebTra
 
 ### Untuk Peserta
 - SuperCollider (lingkungan apa pun yang menggunakan scsynth sebagai audio engine)
-- Node.js (untuk menjalankan local bridge)
-- Browser web modern dengan dukungan WebTransport: Chrome 97+, Edge 98+, Firefox 115+, Opera 83+ (Safari belum didukung saat ini)
+- **Opsi A — Python CLI Bridge** (`local.py`): Python 3.10+ dan `pip install aioquic`
+- **Opsi B — Browser + Node.js Bridge**: Node.js (untuk `bridge.js`) dan browser dengan dukungan WebTransport: Chrome 97+, Edge 98+, Firefox 115+, Opera 83+ (Safari belum didukung saat ini)
 
 ## Struktur Repository
 
@@ -35,9 +46,10 @@ Sistem relay OSC dua arah, latensi rendah untuk SuperCollider menggunakan WebTra
 ├── server/
 │   └── wt_oschub.py       # Hub relay server
 ├── bridge-local/
-│   └── bridge.js          # Local UDP-WebSocket bridge
+│   └── bridge.js          # Local UDP-WebSocket bridge (Opsi B)
 ├── client-web/
-│   └── index.html         # Antarmuka web client (HTML/JS)
+│   └── index.html         # Antarmuka web client (Opsi B)
+├── local.py               # Python CLI bridge (Opsi A — tanpa browser)
 ├── .gitignore
 ├── LICENSE                # GNU GPL v3
 └── README.md
@@ -60,6 +72,7 @@ Opsi tambahan (semua opsional):
 | Opsi | Default | Deskripsi |
 |------|---------|-----------|
 | `--port` | 8443 | Port yang didengarkan hub |
+| `--no-rewrite` | — | Nonaktifkan penulisan ulang alamat OSC (teruskan frame apa adanya) |
 | `--max-msg-size` | 65536 | Ukuran pesan OSC maksimal dalam byte per pesan |
 | `--rate-limit` | 200 | Pesan maksimal per detik per klien |
 | `--log-level` | INFO | Tingkat log: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
@@ -161,6 +174,16 @@ OSCdef(\remoteSNew, {|msg|
 > ```
 > Karena jam internal setiap peserta (`thisThread.seconds`) bersifat independen, beberapa drift tidak dapat dihindari. Menggunakan delta yang cukup besar (mis. 5 detik) membantu menyerap latensi jaringan dan perbedaan jam.
 
+**Notifikasi sistem hub:** Hub mengirimkan dua pesan OSC berikut secara langsung (tanpa penulisan ulang alamat) kepada semua peserta:
+
+- `/hub/join <name>` — dikirim ketika peserta baru bergabung ke session
+- `/hub/leave <name>` — dikirim ketika peserta meninggalkan session
+
+```supercollider
+OSCdef(\hubJoin,  { |msg| ("→ " ++ msg[1] ++ " bergabung").postln }, '/hub/join');
+OSCdef(\hubLeave, { |msg| ("← " ++ msg[1] ++ " keluar").postln  }, '/hub/leave');
+```
+
 Anda juga dapat menggunakan lingkungan kompatibel SC lainnya. Kode setup yang setara untuk Python (Supriya) dan Clojure (Overtone):
 
 **Python (Supriya):**
@@ -223,6 +246,31 @@ Opsi (semua opsional, default ditampilkan):
 | `--sc-port` | 57120 | Port tempat SC/sclang menerima OSC |
 | `--osc-port` | 57121 | Port UDP lokal yang didengarkan bridge untuk OSC dari SC |
 | `--ws-port` | 8080 | Port WebSocket yang diekspos bridge ke browser |
+
+#### Alternatif: Python CLI Bridge (local.py)
+
+`local.py` menggantikan bridge.js dan index.html sekaligus dalam satu skrip Python. Tidak diperlukan browser atau Node.js.
+
+```bash
+pip install aioquic
+python local.py your-hub-server.com --session my-session
+```
+
+Opsi:
+
+| Opsi | Default | Deskripsi |
+|------|---------|-----------|
+| `server` | *(wajib)* | Hostname hub server |
+| `--port` | 8443 | Port hub server |
+| `--sc-port` | 57120 | Port penerima SC |
+| `--osc-port` | 57121 | Port penerima OSC lokal |
+| `--session` | *(ditanya)* | ID session yang akan dimasuki |
+| `--name` | *(opsional)* | Nama tampilan Anda |
+| `--insecure` | — | Nonaktifkan verifikasi sertifikat TLS (untuk sertifikat self-signed) |
+
+Setelah terhubung, konsol menampilkan nama dan ID yang ditetapkan. Routing OSC (datagram vs. stream) mengikuti aturan yang sama seperti browser client. Jika koneksi terputus, bridge akan terhubung kembali secara otomatis dengan exponential backoff (1 dtk → 30 dtk).
+
+> **Catatan:** Saat menggunakan `local.py`, kirim OSC ke port 57121 (`--osc-port`) sebagai pengganti browser. Atur `~bridge = NetAddr("127.0.0.1", 57121)` di SC seperti halnya bridge.js.
 
 #### 3. Koneksi Web
 
