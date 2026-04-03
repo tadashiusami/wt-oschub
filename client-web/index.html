@@ -321,26 +321,30 @@
             while (true) {
                 const { value: stream, done } = await reader.read();
                 if (done) break;
-
-                const sReader = stream.getReader();
-                let chunks = [];
-                while (true) {
-                    const { value, done } = await sReader.read();
-                    if (done) break;
-                    chunks.push(value);
-                }
-                
-                // Reassemble Stream Chunks
-                const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
-                const combined = new Uint8Array(totalLength);
-                let offset = 0;
-                for (const c of chunks) { 
-                    combined.set(c, offset); 
-                    offset += c.length; 
-                }
-                
-                forwardToBridge(combined, "Stream");
+                // Handle each stream independently without blocking the outer loop
+                handleStream(stream);
             }
+        }
+
+        async function handleStream(stream) {
+            const sReader = stream.getReader();
+            let chunks = [];
+            while (true) {
+                const { value, done } = await sReader.read();
+                if (done) break;
+                chunks.push(value);
+            }
+
+            // Reassemble Stream Chunks
+            const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
+            const combined = new Uint8Array(totalLength);
+            let offset = 0;
+            for (const c of chunks) {
+                combined.set(c, offset);
+                offset += c.length;
+            }
+
+            forwardToBridge(combined, "Stream");
         }
 
         function parseOscArgs(data) {
@@ -355,19 +359,16 @@
         }
 
         function forwardToBridge(data, type) {
-            // Strip WebTransport stream header (stream-type varint + session-id varint).
-            // OSC data begins with '/' (0x2F, message) or '#' (0x23, bundle header).
+            // Strip WebTransport stream header.
+            // OSC data always begins with '/' (0x2F, message) or '#' (0x23, bundle).
             let oscData = data;
             if (type === "Stream") {
-                try {
-                    let pos;
-                    [, pos] = decodeVarint(data, 0);   // stream type (e.g. 0x54)
-                    [, pos] = decodeVarint(data, pos);  // session stream ID
-                    oscData = data.slice(pos);
-                } catch (e) {
-                    const start = data.findIndex(b => b === 47 || b === 35);
-                    if (start > 0) oscData = data.slice(start);
+                const start = data.findIndex(b => b === 0x2f || b === 0x23);
+                if (start === -1) {
+                    console.warn('Stream: no OSC start byte found, dropping');
+                    return;
                 }
+                oscData = data.slice(start);
             }
 
             const parsed = parseOscArgs(oscData);

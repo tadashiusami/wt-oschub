@@ -64,25 +64,6 @@ def parse_osc_address(data: bytes) -> str:
         return ''
 
 
-def decode_varint(data: bytes, pos: int = 0):
-    """Decode a QUIC variable-length integer at pos. Returns (value, new_pos)."""
-    if pos >= len(data):
-        raise ValueError("Buffer too short")
-    first = data[pos]
-    prefix = (first & 0xC0) >> 6
-    if prefix == 0:
-        return first & 0x3F, pos + 1
-    elif prefix == 1:
-        if pos + 2 > len(data): raise ValueError("Buffer too short")
-        return int.from_bytes(data[pos:pos+2], 'big') & 0x3FFF, pos + 2
-    elif prefix == 2:
-        if pos + 4 > len(data): raise ValueError("Buffer too short")
-        return int.from_bytes(data[pos:pos+4], 'big') & 0x3FFFFFFF, pos + 4
-    else:
-        if pos + 8 > len(data): raise ValueError("Buffer too short")
-        return int.from_bytes(data[pos:pos+8], 'big') & 0x3FFFFFFFFFFFFFFF, pos + 8
-
-
 def parse_osc_strings(data: bytes) -> list:
     """Extract all null-terminated, 4-byte-aligned strings from an OSC message."""
     results, pos = [], 0
@@ -96,7 +77,23 @@ def parse_osc_strings(data: bytes) -> list:
     return results
 
 
+def strip_stream_header(buf: bytes) -> bytes:
+    """Strip WebTransport stream header and return OSC data.
+
+    OSC data always begins with '/' (0x2F, message) or '#' (0x23, bundle).
+    Rather than parsing the varint header, we find the first OSC start byte
+    directly — this is robust against header format variations.
+    """
+    start = next((i for i, b in enumerate(buf) if b in (0x2F, 0x23)), -1)
+    if start == -1:
+        return b''  # no valid OSC start byte found
+    return buf[start:]
+
+
 # --- WebTransport protocol ---
+
+_SENTINEL = object()  # signals connection lost to the recv loop
+
 
 class WTBridgeProtocol(QuicConnectionProtocol):
     def __init__(self, *args, **kwargs):
@@ -106,6 +103,11 @@ class WTBridgeProtocol(QuicConnectionProtocol):
         self._ready = asyncio.Event()
         self._recv_queue: asyncio.Queue = asyncio.Queue()
         self._stream_buffers: dict = {}
+
+    def connection_lost(self, exc):
+        """Signal the recv loop that the connection is gone."""
+        self._recv_queue.put_nowait(_SENTINEL)
+        super().connection_lost(exc)
 
     def quic_event_received(self, event):
         if self._http is None:
@@ -133,15 +135,10 @@ class WTBridgeProtocol(QuicConnectionProtocol):
                     self._stream_buffers[sid] = buf
                     continue
                 self._stream_buffers.pop(sid, None)
-                # Strip WebTransport stream header (stream-type varint + session-id varint)
-                try:
-                    _, p = decode_varint(buf, 0)
-                    _, p = decode_varint(buf, p)
-                    buf = buf[p:]
-                except Exception:
-                    start = next((i for i, b in enumerate(buf) if b in (0x2F, 0x23)), 0)
-                    buf = buf[start:]
-                self._recv_queue.put_nowait(buf)
+                # Strip WebTransport stream header
+                buf = strip_stream_header(buf)
+                if buf:
+                    self._recv_queue.put_nowait(buf)
 
     def establish_session(self, authority: str, path: str):
         """Send HTTP CONNECT to establish a WebTransport session."""
@@ -206,6 +203,19 @@ def udp_receiver(proto_ref: list, loop_ref: list):
             loop.call_soon_threadsafe(proto.send_osc, data)
 
 
+async def keepalive(protocol: WTBridgeProtocol, interval: int = 20):
+    """Send a small OSC datagram periodically to keep the QUIC connection alive."""
+    ping = b'/ping\x00\x00\x00,\x00\x00\x00'  # minimal valid OSC message
+    while True:
+        await asyncio.sleep(interval)
+        if protocol._session_stream_id is None:
+            break
+        try:
+            protocol.send_datagram(ping)
+        except Exception:
+            break
+
+
 # --- Main ---
 
 async def run():
@@ -223,6 +233,7 @@ async def run():
         is_client=True,
         alpn_protocols=H3_ALPN,
         max_datagram_frame_size=1500,
+        idle_timeout=60.0,
     )
     if args.insecure:
         configuration.verify_mode = ssl.CERT_NONE
@@ -250,14 +261,23 @@ async def run():
                     reconnect_delay = min(reconnect_delay * 2, RECONNECT_DELAY_MAX)
                     continue
 
-                # Forward received OSC to SC
+                # キープアライブを起動（20秒ごとにpingを送信）
+                asyncio.create_task(keepalive(protocol))
+
+                # Forward received OSC to SC until connection is lost
                 while True:
                     data = await protocol._recv_queue.get()
+
+                    # Sentinel: connection_lost was called — break to reconnect
+                    if data is _SENTINEL:
+                        print("[info] Connection lost, reconnecting...", flush=True)
+                        proto_ref[0] = None
+                        break
+
                     address = parse_osc_address(data)
 
                     if address == '/welcome':
                         parts = parse_osc_strings(data)
-                        # ['/welcome', ',ss', client_id, display_name]
                         cid  = parts[2] if len(parts) > 2 else '?'
                         name = parts[3] if len(parts) > 3 else cid
                         print(f"Joined as '{name}' (ID: {cid})")
