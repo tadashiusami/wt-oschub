@@ -133,46 +133,65 @@ I-download at i-install ang SuperCollider mula sa [supercollider.github.io](http
 
 Ang mga mensaheng na-relay mula sa hub ay darating na may OSC address na na-rewrite sa `/remote/<sender_name>/<original_address>` (hal. `/remote/alice/s_new`). Pinapahintulutan nito ang mga tatanggap na malaman kung sino ang nagpadala ng bawat mensahe at hawakan ito nang malinaw sa pamamagitan ng `OSCdef`.
 
-Ang pinakasimpleng setup ay isang `OSCdef` na tumatanggap ng lahat ng remote na mensahe, kumukuha ng orihinal na address, at ipinapasa ang mga ito sa scsynth:
+Ang pinakasimpleng setup ay `thisProcess.addOSCRecvFunc` na tumatanggap ng lahat ng remote na mensahe, kumukuha ng orihinal na address, at ipinapasa ang mga ito sa scsynth. Hindi maaaring gamitin ang `OSCdef` dito dahil ito ay tugma sa mga OSC address sa pamamagitan ng eksaktong string — ang `/remote` ay hindi tutugma sa `/remote/alice/s_new`. I-store ang function sa isang variable para maalis ito mamaya kung kinakailangan.
+
+Ang receive port (`57120`) ay tahasang nifi-filter upang maiwasan ang mga salungatan sa iba pang OSC application na nagbabahagi ng parehong sclang instance — halimbawa, ang SuperDirt ay nagrerehistro ng sarili nitong mga handler at maaaring makagambala kung hindi na-filter. Ang sender port ay hindi nifi-filter dahil gumagamit ang `local.py` ng dinamikong itinalagay na UDP port.
+
+Ang `/ping` ay hindi kasama dahil ang `local.py` ay nagpapadala nito nang pana-panahon bilang keepalive upang mapanatili ang koneksyon ng QUIC, at wala itong kahulugan para sa scsynth.
 
 ```supercollider
-// Tumatanggap ng lahat ng remote OSC mensahe mula sa hub.
-// Ang format ng address ay /remote/<sender_name>/<original_address>.
-// Gamitin ang OSCFunc.trace para siyasatin ang mga papasok na mensahe sa panahon ng session.
-OSCdef(\remoteAll, {|msg|
-    var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
-    // parts = ['remote', 'alice', 's_new', ...]
-    var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
-    s.sendMsg(cmd, *msg[1..]);
-}, nil);
+// Store in a variable so it can be removed with thisProcess.removeOSCRecvFunc(~remoteFunc)
+~remoteFunc = {|msg, time, addr, recvPort|
+    if((addr.ip == "127.0.0.1") && (recvPort == 57120), {
+        if(msg[0].asString.beginsWith("/remote/"), {
+            var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
+            var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
+            if(cmd != '/ping', {
+                var delta = time - thisThread.seconds;
+                if(delta > 0, {
+                    s.sendBundle(delta, [cmd] ++ msg[1..]);
+                }, {
+                    s.sendMsg(cmd, *msg[1..]);
+                });
+            });
+        });
+    });
+};
+
+thisProcess.addOSCRecvFunc(~remoteFunc);
 ```
 
-Para hawakan ang mga mensahe mula sa isang partikular na nagpadala o utos:
+Para alisin ang handler:
 
 ```supercollider
-// Hawakan ang /s_new mula sa sinumang remote na kalahok
-OSCdef(\remoteSNew, {|msg|
-    var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
-    var senderName = parts[1];
-    (senderName ++ " triggered /s_new").postln;
-    s.sendMsg(\s_new, *msg[1..]);
-}, nil);
+thisProcess.removeOSCRecvFunc(~remoteFunc);
 ```
 
-> **Tandaan:** Ang mga OSC Bundle ay ganap na sinusuportahan. Ang hub ay nag-a-parse ng bawat Bundle nang recursive, isinusulat muli ang address ng bawat nakalamang mensahe sa `/remote/<sender_name>/<original_address>`, at pinapanatili ang timetag. Kapag ang isang nagpadala ay gumagamit ng `sendBundle(delta, ...)`, ang sclang sa receiving end ay i-unpack ang Bundle at ipapasa ang timetag bilang argument na `time` sa OSCdef handler. Para mapanatili ang nilayong timing at ipasa ito sa scsynth bilang Bundle, gamitin ang `time` tulad ng sumusunod:
-> ```supercollider
-> OSCdef(\remoteAll, {|msg, time|
->     var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
->     var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
->     var delta = time - thisThread.seconds;
->     if(delta > 0, {
->         s.sendBundle(delta, [cmd] ++ msg[1..]);
->     }, {
->         s.sendMsg(cmd, *msg[1..]);
->     });
-> }, nil);
-> ```
-> Dahil ang panloob na orasan ng bawat kalahok (`thisThread.seconds`) ay independyente, ang ilang drift ay hindi maiiwasan. Ang paggamit ng sapat na malaking delta (hal. 5 segundo) ay tumutulong na masipsip ang network latency at pagkakaiba ng orasan.
+Para hawakan nang piling-pili ang mga mensahe mula sa isang partikular na nagpadala o utos, suriin ang `parts[1]` (pangalan ng nagpadala) o `cmd` sa loob ng handler:
+
+```supercollider
+~remoteFunc = {|msg, time, addr, recvPort|
+    if((addr.ip == "127.0.0.1") && (recvPort == 57120), {
+        if(msg[0].asString.beginsWith("/remote/"), {
+            var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
+            var senderName = parts[1];
+            var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
+            // example: log sender and command
+            (senderName ++ " -> " ++ cmd).postln;
+            if(cmd != '/ping', {
+                var delta = time - thisThread.seconds;
+                if(delta > 0, {
+                    s.sendBundle(delta, [cmd] ++ msg[1..]);
+                }, {
+                    s.sendMsg(cmd, *msg[1..]);
+                });
+            });
+        });
+    });
+};
+```
+
+> **Tandaan:** Ang mga OSC Bundle ay ganap na sinusuportahan. Ang hub ay nag-a-parse ng bawat Bundle nang recursive, isinusulat muli ang address ng bawat nakalamang mensahe sa `/remote/<sender_name>/<original_address>`, at pinapanatili ang timetag. Kapag ang isang nagpadala ay gumagamit ng `sendBundle(delta, ...)`, ang sclang sa receiving end ay i-unpack ang Bundle at ipapasa ang timetag bilang argument na `time`. Ang handler sa itaas ay humahawak na nito sa pamamagitan ng `time - thisThread.seconds` — hindi na kailangan ng karagdagang setup. Dahil ang panloob na orasan ng bawat kalahok (`thisThread.seconds`) ay independyente, ang ilang drift ay hindi maiiwasan. Ang paggamit ng sapat na malaking delta (hal. 5 segundo) ay tumutulong na masipsip ang network latency at pagkakaiba ng orasan.
 
 **Mga abiso ng sistema ng hub:** Nagpapadala ang hub ng dalawang mensaheng OSC na direktang (hindi nirewrite ang address) ipinapadala sa lahat ng kalahok:
 

@@ -133,46 +133,65 @@ systemctl enable --now wt-oschub.timer
 
 从 Hub 中继的消息会将 OSC 地址改写为 `/remote/<发送者名>/<原始地址>`（例如：`/remote/alice/s_new`）后送达。这样接收方可以识别是谁发送的，并通过 `OSCdef` 进行明确处理。
 
-最简单的设置是通过单个 `OSCdef` 接收所有远程消息，提取原始地址后转发给 scsynth：
+最简单的设置是使用 `thisProcess.addOSCRecvFunc` 接收所有远程消息，提取原始地址后转发给 scsynth。此处不能使用 `OSCdef`，因为它按精确字符串匹配 OSC 地址——`/remote` 不会匹配 `/remote/alice/s_new`。将函数存储在变量中，以便后续需要时可以移除。
+
+接收端口（`57120`）被明确过滤，以避免与共享同一 sclang 实例的其他 OSC 应用冲突——例如 SuperDirt 会注册自己的处理器，若不过滤可能会产生干扰。发送端口不做过滤，因为 `local.py` 使用动态分配的 UDP 端口。
+
+`/ping` 被排除在外，因为 `local.py` 会定期发送它作为维持 QUIC 连接的保活信号，对 scsynth 没有任何意义。
 
 ```supercollider
-// 接收来自 Hub 的所有远程 OSC 消息。
-// 地址格式为 /remote/<发送者名>/<原始地址>。
-// 会话期间可用 OSCFunc.trace 查看接收到的消息。
-OSCdef(\remoteAll, {|msg|
-    var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
-    // parts = ['remote', 'alice', 's_new', ...]
-    var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
-    s.sendMsg(cmd, *msg[1..]);
-}, nil);
+// Store in a variable so it can be removed with thisProcess.removeOSCRecvFunc(~remoteFunc)
+~remoteFunc = {|msg, time, addr, recvPort|
+    if((addr.ip == "127.0.0.1") && (recvPort == 57120), {
+        if(msg[0].asString.beginsWith("/remote/"), {
+            var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
+            var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
+            if(cmd != '/ping', {
+                var delta = time - thisThread.seconds;
+                if(delta > 0, {
+                    s.sendBundle(delta, [cmd] ++ msg[1..]);
+                }, {
+                    s.sendMsg(cmd, *msg[1..]);
+                });
+            });
+        });
+    });
+};
+
+thisProcess.addOSCRecvFunc(~remoteFunc);
 ```
 
-只处理特定发送者或命令时：
+移除处理器：
 
 ```supercollider
-// 处理来自任意远程参与者的 /s_new
-OSCdef(\remoteSNew, {|msg|
-    var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
-    var senderName = parts[1];
-    (senderName ++ " triggered /s_new").postln;
-    s.sendMsg(\s_new, *msg[1..]);
-}, nil);
+thisProcess.removeOSCRecvFunc(~remoteFunc);
 ```
 
-> **注意：** OSC Bundle 完全支持。Hub 会递归解析包含嵌套的 Bundle，将其中每条消息的地址改写为 `/remote/<发送者名>/<原始地址>`，同时保留 timetag。如果发送方使用了 `sendBundle(delta, ...)`，接收方的 sclang 会解包 Bundle 并将 timetag 作为 OSCdef 处理器的 `time` 参数传递。要保持预期时序并以 Bundle 形式转发给 scsynth，请按如下方式使用 `time`：
-> ```supercollider
-> OSCdef(\remoteAll, {|msg, time|
->     var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
->     var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
->     var delta = time - thisThread.seconds;
->     if(delta > 0, {
->         s.sendBundle(delta, [cmd] ++ msg[1..]);
->     }, {
->         s.sendMsg(cmd, *msg[1..]);
->     });
-> }, nil);
-> ```
-> 各参与者的内部时钟（`thisThread.seconds`）是独立的，因此难免存在一定误差。使用足够大的 delta（例如 5 秒）可以吸收网络延迟和时钟差异。
+若要针对特定发送者或命令进行选择性处理，可在处理器内检查 `parts[1]`（发送者名）或 `cmd`：
+
+```supercollider
+~remoteFunc = {|msg, time, addr, recvPort|
+    if((addr.ip == "127.0.0.1") && (recvPort == 57120), {
+        if(msg[0].asString.beginsWith("/remote/"), {
+            var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
+            var senderName = parts[1];
+            var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
+            // example: log sender and command
+            (senderName ++ " -> " ++ cmd).postln;
+            if(cmd != '/ping', {
+                var delta = time - thisThread.seconds;
+                if(delta > 0, {
+                    s.sendBundle(delta, [cmd] ++ msg[1..]);
+                }, {
+                    s.sendMsg(cmd, *msg[1..]);
+                });
+            });
+        });
+    });
+};
+```
+
+> **注意：** OSC Bundle 完全支持。Hub 会递归解析包含嵌套的 Bundle，将其中每条消息的地址改写为 `/remote/<发送者名>/<原始地址>`，同时保留 timetag。如果发送方使用了 `sendBundle(delta, ...)`，接收方的 sclang 会解包 Bundle 并将 timetag 作为 `time` 参数传递。上述处理器已通过 `time - thisThread.seconds` 处理了这一情况，无需额外配置。各参与者的内部时钟（`thisThread.seconds`）是独立的，因此难免存在一定误差。使用足够大的 delta（例如 5 秒）可以吸收网络延迟和时钟差异。
 
 **Hub 系统通知：** Hub 会将以下两条 OSC 消息不经地址改写直接发送给所有参与者：
 

@@ -133,46 +133,65 @@ Unduh dan instal SuperCollider dari [supercollider.github.io](https://supercolli
 
 Pesan yang direlay dari hub tiba dengan alamat OSC yang ditulis ulang menjadi `/remote/<sender_name>/<original_address>` (mis. `/remote/alice/s_new`). Ini memungkinkan penerima mengidentifikasi siapa yang mengirim setiap pesan dan menanganinya secara eksplisit melalui `OSCdef`.
 
-Setup paling sederhana adalah satu `OSCdef` yang menerima semua pesan remote, mengekstrak alamat asli, dan meneruskannya ke scsynth:
+Setup paling sederhana adalah `thisProcess.addOSCRecvFunc` yang menerima semua pesan remote, mengekstrak alamat asli, dan meneruskannya ke scsynth. `OSCdef` tidak dapat digunakan di sini karena mencocokkan alamat OSC secara tepat — `/remote` tidak akan cocok dengan `/remote/alice/s_new`. Simpan fungsi dalam variabel agar dapat dihapus nanti jika diperlukan.
+
+Port penerima (`57120`) difilter secara eksplisit untuk menghindari konflik dengan aplikasi OSC lain yang berbagi instance sclang yang sama — misalnya SuperDirt mendaftarkan handler-nya sendiri dan dapat mengganggu jika tidak difilter. Port pengirim tidak difilter karena `local.py` menggunakan port UDP yang ditetapkan secara dinamis.
+
+`/ping` dikecualikan karena `local.py` mengirimkannya secara berkala sebagai keepalive untuk mempertahankan koneksi QUIC, dan tidak memiliki arti bagi scsynth.
 
 ```supercollider
-// Menerima semua pesan OSC remote dari hub.
-// Format alamat adalah /remote/<sender_name>/<original_address>.
-// Gunakan OSCFunc.trace untuk memeriksa pesan masuk selama session.
-OSCdef(\remoteAll, {|msg|
-    var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
-    // parts = ['remote', 'alice', 's_new', ...]
-    var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
-    s.sendMsg(cmd, *msg[1..]);
-}, nil);
+// Store in a variable so it can be removed with thisProcess.removeOSCRecvFunc(~remoteFunc)
+~remoteFunc = {|msg, time, addr, recvPort|
+    if((addr.ip == "127.0.0.1") && (recvPort == 57120), {
+        if(msg[0].asString.beginsWith("/remote/"), {
+            var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
+            var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
+            if(cmd != '/ping', {
+                var delta = time - thisThread.seconds;
+                if(delta > 0, {
+                    s.sendBundle(delta, [cmd] ++ msg[1..]);
+                }, {
+                    s.sendMsg(cmd, *msg[1..]);
+                });
+            });
+        });
+    });
+};
+
+thisProcess.addOSCRecvFunc(~remoteFunc);
 ```
 
-Untuk menangani pesan dari pengirim atau perintah tertentu:
+Untuk menghapus handler:
 
 ```supercollider
-// Tangani /s_new dari peserta remote mana pun
-OSCdef(\remoteSNew, {|msg|
-    var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
-    var senderName = parts[1];
-    (senderName ++ " triggered /s_new").postln;
-    s.sendMsg(\s_new, *msg[1..]);
-}, nil);
+thisProcess.removeOSCRecvFunc(~remoteFunc);
 ```
 
-> **Catatan:** OSC Bundle didukung sepenuhnya. Hub mem-parsing setiap Bundle secara rekursif, menulis ulang alamat setiap pesan yang terkandung menjadi `/remote/<sender_name>/<original_address>`, dan mempertahankan timetag. Ketika pengirim menggunakan `sendBundle(delta, ...)`, sclang di sisi penerima akan membongkar Bundle dan meneruskan timetag sebagai argumen `time` ke handler OSCdef. Untuk mempertahankan timing yang dimaksud dan meneruskannya ke scsynth sebagai Bundle, gunakan `time` sebagai berikut:
-> ```supercollider
-> OSCdef(\remoteAll, {|msg, time|
->     var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
->     var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
->     var delta = time - thisThread.seconds;
->     if(delta > 0, {
->         s.sendBundle(delta, [cmd] ++ msg[1..]);
->     }, {
->         s.sendMsg(cmd, *msg[1..]);
->     });
-> }, nil);
-> ```
-> Karena jam internal setiap peserta (`thisThread.seconds`) bersifat independen, beberapa drift tidak dapat dihindari. Menggunakan delta yang cukup besar (mis. 5 detik) membantu menyerap latensi jaringan dan perbedaan jam.
+Untuk menangani pesan dari pengirim atau perintah tertentu secara selektif, periksa `parts[1]` (nama pengirim) atau `cmd` di dalam handler:
+
+```supercollider
+~remoteFunc = {|msg, time, addr, recvPort|
+    if((addr.ip == "127.0.0.1") && (recvPort == 57120), {
+        if(msg[0].asString.beginsWith("/remote/"), {
+            var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
+            var senderName = parts[1];
+            var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
+            // example: log sender and command
+            (senderName ++ " -> " ++ cmd).postln;
+            if(cmd != '/ping', {
+                var delta = time - thisThread.seconds;
+                if(delta > 0, {
+                    s.sendBundle(delta, [cmd] ++ msg[1..]);
+                }, {
+                    s.sendMsg(cmd, *msg[1..]);
+                });
+            });
+        });
+    });
+};
+```
+
+> **Catatan:** OSC Bundle didukung sepenuhnya. Hub mem-parsing setiap Bundle secara rekursif, menulis ulang alamat setiap pesan yang terkandung menjadi `/remote/<sender_name>/<original_address>`, dan mempertahankan timetag. Ketika pengirim menggunakan `sendBundle(delta, ...)`, sclang di sisi penerima akan membongkar Bundle dan meneruskan timetag sebagai argumen `time`. Handler di atas sudah menangani ini melalui `time - thisThread.seconds` — tidak diperlukan pengaturan tambahan. Karena jam internal setiap peserta (`thisThread.seconds`) bersifat independen, beberapa drift tidak dapat dihindari. Menggunakan delta yang cukup besar (mis. 5 detik) membantu menyerap latensi jaringan dan perbedaan jam.
 
 **Notifikasi sistem hub:** Hub mengirimkan dua pesan OSC berikut secara langsung (tanpa penulisan ulang alamat) kepada semua peserta:
 

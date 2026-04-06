@@ -133,46 +133,65 @@ Tải và cài đặt SuperCollider từ [supercollider.github.io](https://super
 
 Các tin nhắn được relay từ hub đến với địa chỉ OSC được viết lại thành `/remote/<sender_name>/<original_address>` (ví dụ: `/remote/alice/s_new`). Điều này cho phép người nhận xác định ai đã gửi mỗi tin nhắn và xử lý nó tường minh qua `OSCdef`.
 
-Cài đặt đơn giản nhất là một `OSCdef` nhận tất cả tin nhắn từ xa, trích xuất địa chỉ gốc và chuyển tiếp chúng đến scsynth:
+Cài đặt đơn giản nhất là `thisProcess.addOSCRecvFunc` nhận tất cả tin nhắn từ xa, trích xuất địa chỉ gốc và chuyển tiếp chúng đến scsynth. Không thể dùng `OSCdef` ở đây vì nó khớp địa chỉ OSC theo chuỗi chính xác — `/remote` sẽ không khớp với `/remote/alice/s_new`. Lưu hàm trong biến để có thể xóa sau nếu cần.
+
+Cổng nhận (`57120`) được lọc tường minh để tránh xung đột với các ứng dụng OSC khác cùng dùng chung instance sclang — ví dụ SuperDirt đăng ký handler riêng và có thể gây nhiễu nếu không lọc. Cổng gửi không được lọc vì `local.py` dùng cổng UDP được gán động.
+
+`/ping` bị loại trừ vì `local.py` gửi nó định kỳ như keepalive để duy trì kết nối QUIC, và không có ý nghĩa gì với scsynth.
 
 ```supercollider
-// Nhận tất cả tin nhắn OSC từ xa từ hub.
-// Định dạng địa chỉ là /remote/<sender_name>/<original_address>.
-// Dùng OSCFunc.trace để kiểm tra tin nhắn đến trong quá trình session.
-OSCdef(\remoteAll, {|msg|
-    var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
-    // parts = ['remote', 'alice', 's_new', ...]
-    var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
-    s.sendMsg(cmd, *msg[1..]);
-}, nil);
+// Store in a variable so it can be removed with thisProcess.removeOSCRecvFunc(~remoteFunc)
+~remoteFunc = {|msg, time, addr, recvPort|
+    if((addr.ip == "127.0.0.1") && (recvPort == 57120), {
+        if(msg[0].asString.beginsWith("/remote/"), {
+            var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
+            var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
+            if(cmd != '/ping', {
+                var delta = time - thisThread.seconds;
+                if(delta > 0, {
+                    s.sendBundle(delta, [cmd] ++ msg[1..]);
+                }, {
+                    s.sendMsg(cmd, *msg[1..]);
+                });
+            });
+        });
+    });
+};
+
+thisProcess.addOSCRecvFunc(~remoteFunc);
 ```
 
-Để xử lý tin nhắn từ người gửi hoặc lệnh cụ thể:
+Để xóa handler:
 
 ```supercollider
-// Xử lý /s_new từ bất kỳ người tham gia từ xa nào
-OSCdef(\remoteSNew, {|msg|
-    var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
-    var senderName = parts[1];
-    (senderName ++ " triggered /s_new").postln;
-    s.sendMsg(\s_new, *msg[1..]);
-}, nil);
+thisProcess.removeOSCRecvFunc(~remoteFunc);
 ```
 
-> **Lưu ý:** OSC Bundle được hỗ trợ đầy đủ. Hub phân tích từng Bundle đệ quy, viết lại địa chỉ của mỗi tin nhắn chứa trong đó thành `/remote/<sender_name>/<original_address>`, và giữ nguyên timetag. Khi người gửi dùng `sendBundle(delta, ...)`, sclang ở phía nhận sẽ unpack Bundle và truyền timetag làm đối số `time` cho OSCdef handler. Để giữ nguyên timing dự định và chuyển tiếp đến scsynth dưới dạng Bundle, dùng `time` như sau:
-> ```supercollider
-> OSCdef(\remoteAll, {|msg, time|
->     var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
->     var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
->     var delta = time - thisThread.seconds;
->     if(delta > 0, {
->         s.sendBundle(delta, [cmd] ++ msg[1..]);
->     }, {
->         s.sendMsg(cmd, *msg[1..]);
->     });
-> }, nil);
-> ```
-> Vì đồng hồ nội bộ của mỗi người tham gia (`thisThread.seconds`) là độc lập, một số drift là không thể tránh khỏi. Dùng delta đủ lớn (ví dụ: 5 giây) giúp hấp thụ độ trễ mạng và sự khác biệt đồng hồ.
+Để xử lý có chọn lọc tin nhắn từ người gửi hoặc lệnh cụ thể, kiểm tra `parts[1]` (tên người gửi) hoặc `cmd` bên trong handler:
+
+```supercollider
+~remoteFunc = {|msg, time, addr, recvPort|
+    if((addr.ip == "127.0.0.1") && (recvPort == 57120), {
+        if(msg[0].asString.beginsWith("/remote/"), {
+            var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
+            var senderName = parts[1];
+            var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
+            // example: log sender and command
+            (senderName ++ " -> " ++ cmd).postln;
+            if(cmd != '/ping', {
+                var delta = time - thisThread.seconds;
+                if(delta > 0, {
+                    s.sendBundle(delta, [cmd] ++ msg[1..]);
+                }, {
+                    s.sendMsg(cmd, *msg[1..]);
+                });
+            });
+        });
+    });
+};
+```
+
+> **Lưu ý:** OSC Bundle được hỗ trợ đầy đủ. Hub phân tích từng Bundle đệ quy, viết lại địa chỉ của mỗi tin nhắn chứa trong đó thành `/remote/<sender_name>/<original_address>`, và giữ nguyên timetag. Khi người gửi dùng `sendBundle(delta, ...)`, sclang ở phía nhận sẽ unpack Bundle và truyền timetag làm đối số `time`. Handler trên đã xử lý điều này qua `time - thisThread.seconds` — không cần cài đặt thêm. Vì đồng hồ nội bộ của mỗi người tham gia (`thisThread.seconds`) là độc lập, một số drift là không thể tránh khỏi. Dùng delta đủ lớn (ví dụ: 5 giây) giúp hấp thụ độ trễ mạng và sự khác biệt đồng hồ.
 
 **Thông báo hệ thống hub:** Hub gửi hai tin nhắn OSC trực tiếp (không viết lại địa chỉ) đến tất cả người tham gia:
 

@@ -133,46 +133,65 @@ systemctl enable --now wt-oschub.timer
 
 ハブから中継されたメッセージは、OSC アドレスが `/remote/<送信者名>/<元のアドレス>`（例：`/remote/alice/s_new`）に書き換えられて届きます。これにより、受信側は誰が送信したかを識別し、`OSCdef` で明示的に処理できます。
 
-最もシンプルな設定は、全リモートメッセージを受信する単一の `OSCdef` で元のアドレスを取り出して scsynth へ転送するものです:
+最もシンプルな設定は `thisProcess.addOSCRecvFunc` で、全リモートメッセージを受信し、元のアドレスを取り出して scsynth へ転送します。`OSCdef` はここでは使用できません。OSC アドレスを完全一致文字列でマッチするため、`/remote` は `/remote/alice/s_new` にマッチしません。後で削除できるよう、関数を変数に格納します。
+
+受信ポート（`57120`）は、同じ sclang インスタンスを共有する他の OSC アプリケーションとの競合を避けるために明示的にフィルタリングされます。例えば SuperDirt は独自のハンドラを登録しており、フィルタリングしないと干渉する可能性があります。送信ポートはフィルタリングしません。`local.py` は動的に割り当てられた UDP ポートを使用するためです。
+
+`/ping` は除外されます。`local.py` が QUIC 接続を維持するためのキープアライブとして定期的に送信しますが、scsynth にとって意味がありません。
 
 ```supercollider
-// ハブからの全リモート OSC メッセージを受信する。
-// アドレスの形式は /remote/<送信者名>/<元のアドレス>。
-// セッション中は OSCFunc.trace で受信メッセージを確認できます。
-OSCdef(\remoteAll, {|msg|
-    var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
-    // parts = ['remote', 'alice', 's_new', ...]
-    var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
-    s.sendMsg(cmd, *msg[1..]);
-}, nil);
+// Store in a variable so it can be removed with thisProcess.removeOSCRecvFunc(~remoteFunc)
+~remoteFunc = {|msg, time, addr, recvPort|
+    if((addr.ip == "127.0.0.1") && (recvPort == 57120), {
+        if(msg[0].asString.beginsWith("/remote/"), {
+            var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
+            var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
+            if(cmd != '/ping', {
+                var delta = time - thisThread.seconds;
+                if(delta > 0, {
+                    s.sendBundle(delta, [cmd] ++ msg[1..]);
+                }, {
+                    s.sendMsg(cmd, *msg[1..]);
+                });
+            });
+        });
+    });
+};
+
+thisProcess.addOSCRecvFunc(~remoteFunc);
 ```
 
-特定の送信者やコマンドだけを処理する場合:
+ハンドラを削除するには:
 
 ```supercollider
-// 任意のリモート参加者からの /s_new を処理する
-OSCdef(\remoteSNew, {|msg|
-    var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
-    var senderName = parts[1];
-    (senderName ++ " triggered /s_new").postln;
-    s.sendMsg(\s_new, *msg[1..]);
-}, nil);
+thisProcess.removeOSCRecvFunc(~remoteFunc);
 ```
 
-> **注意:** OSC Bundle は完全に対応しています。ハブはバンドルをネストを含めて再帰的に解析し、含まれる各メッセージのアドレスを `/remote/<送信者名>/<元のアドレス>` に書き換えつつ、timetag を保持します。送信側が `sendBundle(delta, ...)` を使用した場合、受信側の sclang はバンドルを展開し、timetag を OSCdef ハンドラの `time` 引数として渡します。意図したタイミングを保持して scsynth へバンドルとして転送するには、以下のように `time` を使用します:
-> ```supercollider
-> OSCdef(\remoteAll, {|msg, time|
->     var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
->     var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
->     var delta = time - thisThread.seconds;
->     if(delta > 0, {
->         s.sendBundle(delta, [cmd] ++ msg[1..]);
->     }, {
->         s.sendMsg(cmd, *msg[1..]);
->     });
-> }, nil);
-> ```
-> 各参加者の内部クロック（`thisThread.seconds`）は独立しているため、多少のずれは避けられません。十分に大きな delta（例：5秒）を取ることで、ネットワーク遅延やクロック差を吸収できます。
+特定の送信者やコマンドだけを選択的に処理するには、ハンドラ内で `parts[1]`（送信者名）または `cmd` を確認します:
+
+```supercollider
+~remoteFunc = {|msg, time, addr, recvPort|
+    if((addr.ip == "127.0.0.1") && (recvPort == 57120), {
+        if(msg[0].asString.beginsWith("/remote/"), {
+            var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
+            var senderName = parts[1];
+            var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
+            // example: log sender and command
+            (senderName ++ " -> " ++ cmd).postln;
+            if(cmd != '/ping', {
+                var delta = time - thisThread.seconds;
+                if(delta > 0, {
+                    s.sendBundle(delta, [cmd] ++ msg[1..]);
+                }, {
+                    s.sendMsg(cmd, *msg[1..]);
+                });
+            });
+        });
+    });
+};
+```
+
+> **注意:** OSC Bundle は完全に対応しています。ハブはバンドルをネストを含めて再帰的に解析し、含まれる各メッセージのアドレスを `/remote/<送信者名>/<元のアドレス>` に書き換えつつ、timetag を保持します。送信側が `sendBundle(delta, ...)` を使用した場合、受信側の sclang はバンドルを展開し、timetag を `time` 引数として渡します。上記ハンドラはすでに `time - thisThread.seconds` でこれを処理しており、追加の設定は不要です。各参加者の内部クロック（`thisThread.seconds`）は独立しているため、多少のずれは避けられません。十分に大きな delta（例：5秒）を取ることで、ネットワーク遅延やクロック差を吸収できます。
 
 **ハブシステム通知:** ハブは以下の2つの OSC メッセージをアドレス書き換えなしで全参加者に送信します:
 
