@@ -179,7 +179,12 @@ To handle messages from a specific sender or command selectively, check `parts[1
             // example: log sender and command
             (senderName ++ " -> " ++ cmd).postln;
             if(cmd != '/ping', {
-                s.sendMsg(cmd, *msg[1..]);
+                var delta = time - thisThread.seconds;
+                if(delta > 0, {
+                    s.sendBundle(delta, [cmd] ++ msg[1..]);
+                }, {
+                    s.sendMsg(cmd, *msg[1..]);
+                });
             });
         });
     });
