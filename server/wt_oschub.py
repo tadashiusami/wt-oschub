@@ -55,6 +55,18 @@ def build_osc_message(address: str, *args) -> bytes:
         msg += encode_osc_string(str(arg))
     return msg
 
+def rewrite_ping_to_reply(data: bytes) -> bytes:
+    """/ping address rewritten to /ping/reply. Arguments are preserved as-is."""
+    try:
+        end = data.index(b'\x00')
+        if data[:end].decode('utf-8') != '/ping':
+            return data
+        # '/ping' = 5 chars + null = 6 bytes → padded to 8 bytes
+        new_addr = b'/ping/reply\x00'  # 12 bytes, already 4-byte aligned
+        return new_addr + data[8:]
+    except Exception:
+        return data
+
 def parse_osc_address(data: bytes) -> str:
     """Extracts the OSC address from a raw OSC message."""
     if not data or data[0:1] != b'/':
@@ -241,6 +253,8 @@ class OSCHubProtocol(QuicConnectionProtocol):
                 logger.debug(f"Datagram received: {address} ({len(http_event.data)} bytes)")
                 if address == '/who' or self._bundle_contains_who(http_event.data):
                     self._handle_who()
+                elif address == '/ping':
+                    self._handle_ping(http_event.data)
                 else:
                     self.broadcast_data(http_event.data, is_datagram=True)
 
@@ -265,6 +279,8 @@ class OSCHubProtocol(QuicConnectionProtocol):
                 logger.info(f"Stream received: {address} ({len(buf)} bytes)")
                 if address == '/who' or self._bundle_contains_who(buf):
                     self._handle_who()
+                elif address == '/ping':
+                    self._handle_ping(buf)
                 else:
                     self.broadcast_data(buf, is_datagram=False)
 
@@ -346,6 +362,12 @@ class OSCHubProtocol(QuicConnectionProtocol):
         reply = build_osc_message('/who/reply', *display_names)
         self._send_to_self(reply)
         logger.info(f"[/who] Replied to '{self.display_name}' with {display_names}")
+
+    def _handle_ping(self, data: bytes):
+        """Replies to the sender with /ping/reply, preserving all arguments."""
+        reply = rewrite_ping_to_reply(data)
+        self._send_to_self(reply)
+        logger.debug(f"[/ping] Replied to '{self.display_name}'")
 
     def broadcast_data(self, data, is_datagram=True):
         """Relays received data to all other clients in the same session.

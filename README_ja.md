@@ -137,7 +137,7 @@ systemctl enable --now wt-oschub.timer
 
 受信ポート（`57120`）は、同じ sclang インスタンスを共有する他の OSC アプリケーションとの競合を避けるために明示的にフィルタリングされます。例えば SuperDirt は独自のハンドラを登録しており、フィルタリングしないと干渉する可能性があります。送信ポートはフィルタリングしません。`local.py` は動的に割り当てられた UDP ポートを使用するためです。
 
-`/ping` は除外されます。`local.py` が QUIC 接続を維持するためのキープアライブとして定期的に送信しますが、scsynth にとって意味がありません。
+`/ping` メッセージはハブが処理し、送信者に `/ping/reply` として返します。他の参加者にはブロードキャストされません。以下のリレーハンドラーから `/ping` を明示的に除外する必要はありません。
 
 ```supercollider
 // Store in a variable so it can be removed with thisProcess.removeOSCRecvFunc(~remoteFunc)
@@ -146,13 +146,11 @@ systemctl enable --now wt-oschub.timer
         if(msg[0].asString.beginsWith("/remote/"), {
             var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
             var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
-            if(cmd != '/ping', {
-                var delta = time - thisThread.seconds;
-                if(delta > 0, {
-                    s.sendBundle(delta, [cmd] ++ msg[1..]);
-                }, {
-                    s.sendMsg(cmd, *msg[1..]);
-                });
+            var delta = time - thisThread.seconds;
+            if(delta > 0, {
+                s.sendBundle(delta, [cmd] ++ msg[1..]);
+            }, {
+                s.sendMsg(cmd, *msg[1..]);
             });
         });
     });
@@ -178,13 +176,11 @@ thisProcess.removeOSCRecvFunc(~remoteFunc);
             var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
             // example: log sender and command
             (senderName ++ " -> " ++ cmd).postln;
-            if(cmd != '/ping', {
-                var delta = time - thisThread.seconds;
-                if(delta > 0, {
-                    s.sendBundle(delta, [cmd] ++ msg[1..]);
-                }, {
-                    s.sendMsg(cmd, *msg[1..]);
-                });
+            var delta = time - thisThread.seconds;
+            if(delta > 0, {
+                s.sendBundle(delta, [cmd] ++ msg[1..]);
+            }, {
+                s.sendMsg(cmd, *msg[1..]);
             });
         });
     });
@@ -365,6 +361,40 @@ bridge.send_message("/n_free", [11000])
 ```
 
 > **注意:** `synthdef-bytes` は `overtone.sc.machinery.synthdef` が提供する関数で、SynthDef を scsynth が期待するバイナリ形式にシリアライズします。
+
+#### 5. レイテンシーの計測（/ping）
+
+タイムスタンプ付きの `/ping` メッセージを送信することで、ラウンドトリップのレイテンシーを計測できます。ハブはすべての引数を保持したまま `/ping/reply` として返します。なお、`local.py` は引数なしの `/ping` キープアライブを20秒ごとに送信します。`msg.size > 1` で判定してフィルタリングしてください:
+
+```supercollider
+// 2秒ごとに遅延を継続的に計測し、~latency を更新する
+~pingTimes = Array.newClear(10);
+~pingIndex = 0;
+
+OSCdef(\pingReply, { |msg|
+    if(msg.size > 1, {  // キープアライブ ping（引数なし）は除外
+        var rtt = Date.getDate.rawSeconds - msg[1].asFloat;
+        var latency = rtt / 2;
+        ~pingTimes[~pingIndex % 10] = latency;
+        ~pingIndex = ~pingIndex + 1;
+        if(~pingIndex >= 10) {
+            var valid = ~pingTimes.select({ |v| v.notNil });
+            ~latency = valid.maxItem * 1.5;  // 最悪ケース × 1.5 の安全マージン
+            ("latency updated: " ++ ~latency.round(0.001) ++ "s").postln;
+        };
+    });
+}, '/ping/reply');
+
+~pingRoutine = Routine({
+    loop {
+        ~bridge.sendMsg('/ping', Date.getDate.rawSeconds);
+        2.wait;
+    };
+}).play(SystemClock);
+
+// 停止するには:
+// ~pingRoutine.stop;
+```
 
 ## 技術的な補足
 

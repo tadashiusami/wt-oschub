@@ -137,7 +137,7 @@ systemctl enable --now wt-oschub.timer
 
 พอร์ตรับ (`57120`) ถูกกรองอย่างชัดเจนเพื่อหลีกเลี่ยงความขัดแย้งกับแอปพลิเคชัน OSC อื่นที่ใช้ sclang instance เดียวกัน — ตัวอย่างเช่น SuperDirt ลงทะเบียน handler ของตัวเองและอาจรบกวนหากไม่ได้กรอง พอร์ตผู้ส่งไม่ถูกกรองเพราะ `local.py` ใช้พอร์ต UDP ที่กำหนดแบบไดนามิก
 
-`/ping` ถูกยกเว้นเพราะ `local.py` ส่งมันเป็นระยะเป็น keepalive เพื่อรักษาการเชื่อมต่อ QUIC และไม่มีความหมายสำหรับ scsynth
+ข้อความ `/ping` จะถูกฮับจัดการและส่งคืนให้ผู้ส่งเป็น `/ping/reply` — ไม่บรอดแคสต์ไปยังผู้เข้าร่วมคนอื่น relay handler ด้านล่างไม่จำเป็นต้องยกเว้น `/ping` อย่างชัดเจน
 
 ```supercollider
 // Store in a variable so it can be removed with thisProcess.removeOSCRecvFunc(~remoteFunc)
@@ -146,13 +146,11 @@ systemctl enable --now wt-oschub.timer
         if(msg[0].asString.beginsWith("/remote/"), {
             var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
             var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
-            if(cmd != '/ping', {
-                var delta = time - thisThread.seconds;
-                if(delta > 0, {
-                    s.sendBundle(delta, [cmd] ++ msg[1..]);
-                }, {
-                    s.sendMsg(cmd, *msg[1..]);
-                });
+            var delta = time - thisThread.seconds;
+            if(delta > 0, {
+                s.sendBundle(delta, [cmd] ++ msg[1..]);
+            }, {
+                s.sendMsg(cmd, *msg[1..]);
             });
         });
     });
@@ -178,13 +176,11 @@ thisProcess.removeOSCRecvFunc(~remoteFunc);
             var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
             // example: log sender and command
             (senderName ++ " -> " ++ cmd).postln;
-            if(cmd != '/ping', {
-                var delta = time - thisThread.seconds;
-                if(delta > 0, {
-                    s.sendBundle(delta, [cmd] ++ msg[1..]);
-                }, {
-                    s.sendMsg(cmd, *msg[1..]);
-                });
+            var delta = time - thisThread.seconds;
+            if(delta > 0, {
+                s.sendBundle(delta, [cmd] ++ msg[1..]);
+            }, {
+                s.sendMsg(cmd, *msg[1..]);
             });
         });
     });
@@ -365,6 +361,40 @@ bridge.send_message("/n_free", [11000])
 ```
 
 > **หมายเหตุ:** `synthdef-bytes` ให้มาโดย `overtone.sc.machinery.synthdef` และ serialize SynthDef ไปยังรูปแบบ binary ที่ scsynth คาดหวัง
+
+#### 5. การวัดความหน่วง (/ping)
+
+ผู้เข้าร่วมคนใดก็ได้สามารถวัดความหน่วง round-trip โดยส่งข้อความ `/ping` พร้อม timestamp ฮับจะส่งคืนเป็น `/ping/reply` โดยเก็บอาร์กิวเมนต์ทั้งหมดไว้ โปรดทราบว่า `local.py` ส่ง keepalive `/ping` ที่ไม่มีอาร์กิวเมนต์ทุก 20 วินาที — กรองด้วยการตรวจสอบ `msg.size > 1`:
+
+```supercollider
+// วัดความหน่วงอย่างต่อเนื่องและอัปเดต ~latency ทุก 2 วินาที
+~pingTimes = Array.newClear(10);
+~pingIndex = 0;
+
+OSCdef(\pingReply, { |msg|
+    if(msg.size > 1, {  // ละเว้น keepalive ping (ไม่มีอาร์กิวเมนต์ timestamp)
+        var rtt = Date.getDate.rawSeconds - msg[1].asFloat;
+        var latency = rtt / 2;
+        ~pingTimes[~pingIndex % 10] = latency;
+        ~pingIndex = ~pingIndex + 1;
+        if(~pingIndex >= 10) {
+            var valid = ~pingTimes.select({ |v| v.notNil });
+            ~latency = valid.maxItem * 1.5;  // กรณีเลวร้ายที่สุด × 1.5 margin ความปลอดภัย
+            ("latency updated: " ++ ~latency.round(0.001) ++ "s").postln;
+        };
+    });
+}, '/ping/reply');
+
+~pingRoutine = Routine({
+    loop {
+        ~bridge.sendMsg('/ping', Date.getDate.rawSeconds);
+        2.wait;
+    };
+}).play(SystemClock);
+
+// หยุด ping:
+// ~pingRoutine.stop;
+```
 
 ## บันทึกทางเทคนิค
 

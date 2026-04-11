@@ -137,7 +137,7 @@ systemctl enable --now wt-oschub.timer
 
 수신 포트（`57120`）는 동일한 sclang 인스턴스를 공유하는 다른 OSC 애플리케이션과의 충돌을 피하기 위해 명시적으로 필터링됩니다. 예를 들어 SuperDirt는 자체 핸들러를 등록하며 필터링하지 않으면 간섭할 수 있습니다. 송신 포트는 필터링하지 않습니다. `local.py`는 동적으로 할당된 UDP 포트를 사용하기 때문입니다.
 
-`/ping`은 제외됩니다. `local.py`가 QUIC 연결을 유지하기 위한 키프얼라이브로 주기적으로 전송하지만, scsynth에는 의미가 없습니다.
+`/ping` 메시지는 허브가 처리하여 송신자에게 `/ping/reply`로 돌려줍니다 — 다른 참가자에게는 브로드캐스트되지 않습니다. 아래 릴레이 핸들러에서 `/ping`을 명시적으로 제외할 필요가 없습니다.
 
 ```supercollider
 // Store in a variable so it can be removed with thisProcess.removeOSCRecvFunc(~remoteFunc)
@@ -146,13 +146,11 @@ systemctl enable --now wt-oschub.timer
         if(msg[0].asString.beginsWith("/remote/"), {
             var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
             var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
-            if(cmd != '/ping', {
-                var delta = time - thisThread.seconds;
-                if(delta > 0, {
-                    s.sendBundle(delta, [cmd] ++ msg[1..]);
-                }, {
-                    s.sendMsg(cmd, *msg[1..]);
-                });
+            var delta = time - thisThread.seconds;
+            if(delta > 0, {
+                s.sendBundle(delta, [cmd] ++ msg[1..]);
+            }, {
+                s.sendMsg(cmd, *msg[1..]);
             });
         });
     });
@@ -178,13 +176,11 @@ thisProcess.removeOSCRecvFunc(~remoteFunc);
             var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
             // example: log sender and command
             (senderName ++ " -> " ++ cmd).postln;
-            if(cmd != '/ping', {
-                var delta = time - thisThread.seconds;
-                if(delta > 0, {
-                    s.sendBundle(delta, [cmd] ++ msg[1..]);
-                }, {
-                    s.sendMsg(cmd, *msg[1..]);
-                });
+            var delta = time - thisThread.seconds;
+            if(delta > 0, {
+                s.sendBundle(delta, [cmd] ++ msg[1..]);
+            }, {
+                s.sendMsg(cmd, *msg[1..]);
             });
         });
     });
@@ -365,6 +361,40 @@ bridge.send_message("/n_free", [11000])
 ```
 
 > **참고:** `synthdef-bytes`는 `overtone.sc.machinery.synthdef`가 제공하는 함수로, SynthDef를 scsynth가 요구하는 바이너리 형식으로 직렬화합니다.
+
+#### 5. 레이턴시 측정（/ping）
+
+타임스탬프가 포함된 `/ping` 메시지를 보내면 왕복 레이턴시를 측정할 수 있습니다. 허브는 모든 인수를 보존하여 `/ping/reply`로 돌려줍니다. `local.py`는 20초마다 인수 없는 `/ping` 키프얼라이브를 전송하므로, `msg.size > 1`로 필터링하세요:
+
+```supercollider
+// 2초마다 지연을 지속적으로 측정하여 ~latency 업데이트
+~pingTimes = Array.newClear(10);
+~pingIndex = 0;
+
+OSCdef(\pingReply, { |msg|
+    if(msg.size > 1, {  // 키프얼라이브 ping（타임스탬프 인수 없음）은 제외
+        var rtt = Date.getDate.rawSeconds - msg[1].asFloat;
+        var latency = rtt / 2;
+        ~pingTimes[~pingIndex % 10] = latency;
+        ~pingIndex = ~pingIndex + 1;
+        if(~pingIndex >= 10) {
+            var valid = ~pingTimes.select({ |v| v.notNil });
+            ~latency = valid.maxItem * 1.5;  // 최악의 경우 × 1.5 안전 마진
+            ("latency updated: " ++ ~latency.round(0.001) ++ "s").postln;
+        };
+    });
+}, '/ping/reply');
+
+~pingRoutine = Routine({
+    loop {
+        ~bridge.sendMsg('/ping', Date.getDate.rawSeconds);
+        2.wait;
+    };
+}).play(SystemClock);
+
+// 정지하려면:
+// ~pingRoutine.stop;
+```
 
 ## 기술적 보충
 

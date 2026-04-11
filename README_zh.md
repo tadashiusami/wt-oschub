@@ -137,7 +137,7 @@ systemctl enable --now wt-oschub.timer
 
 接收端口（`57120`）被明确过滤，以避免与共享同一 sclang 实例的其他 OSC 应用冲突——例如 SuperDirt 会注册自己的处理器，若不过滤可能会产生干扰。发送端口不做过滤，因为 `local.py` 使用动态分配的 UDP 端口。
 
-`/ping` 被排除在外，因为 `local.py` 会定期发送它作为维持 QUIC 连接的保活信号，对 scsynth 没有任何意义。
+`/ping` 消息由 Hub 处理并以 `/ping/reply` 的形式回送给发送者——不会广播给其他参与者。以下中继处理器无需显式排除 `/ping`。
 
 ```supercollider
 // Store in a variable so it can be removed with thisProcess.removeOSCRecvFunc(~remoteFunc)
@@ -146,13 +146,11 @@ systemctl enable --now wt-oschub.timer
         if(msg[0].asString.beginsWith("/remote/"), {
             var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
             var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
-            if(cmd != '/ping', {
-                var delta = time - thisThread.seconds;
-                if(delta > 0, {
-                    s.sendBundle(delta, [cmd] ++ msg[1..]);
-                }, {
-                    s.sendMsg(cmd, *msg[1..]);
-                });
+            var delta = time - thisThread.seconds;
+            if(delta > 0, {
+                s.sendBundle(delta, [cmd] ++ msg[1..]);
+            }, {
+                s.sendMsg(cmd, *msg[1..]);
             });
         });
     });
@@ -178,13 +176,11 @@ thisProcess.removeOSCRecvFunc(~remoteFunc);
             var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
             // example: log sender and command
             (senderName ++ " -> " ++ cmd).postln;
-            if(cmd != '/ping', {
-                var delta = time - thisThread.seconds;
-                if(delta > 0, {
-                    s.sendBundle(delta, [cmd] ++ msg[1..]);
-                }, {
-                    s.sendMsg(cmd, *msg[1..]);
-                });
+            var delta = time - thisThread.seconds;
+            if(delta > 0, {
+                s.sendBundle(delta, [cmd] ++ msg[1..]);
+            }, {
+                s.sendMsg(cmd, *msg[1..]);
             });
         });
     });
@@ -365,6 +361,40 @@ bridge.send_message("/n_free", [11000])
 ```
 
 > **注意：** `synthdef-bytes` 是 `overtone.sc.machinery.synthdef` 提供的函数，用于将 SynthDef 序列化为 scsynth 所需的二进制格式。
+
+#### 5. 测量延迟（/ping）
+
+任何参与者都可以通过发送带有时间戳的 `/ping` 消息来测量往返延迟。Hub 会将所有参数原样保留，以 `/ping/reply` 的形式回应。请注意，`local.py` 每 20 秒会发送一次无参数的 `/ping` 保活信号，通过检查 `msg.size > 1` 可以过滤掉这类信号：
+
+```supercollider
+// 每 2 秒持续测量延迟并更新 ~latency
+~pingTimes = Array.newClear(10);
+~pingIndex = 0;
+
+OSCdef(\pingReply, { |msg|
+    if(msg.size > 1, {  // 忽略保活 ping（无时间戳参数）
+        var rtt = Date.getDate.rawSeconds - msg[1].asFloat;
+        var latency = rtt / 2;
+        ~pingTimes[~pingIndex % 10] = latency;
+        ~pingIndex = ~pingIndex + 1;
+        if(~pingIndex >= 10) {
+            var valid = ~pingTimes.select({ |v| v.notNil });
+            ~latency = valid.maxItem * 1.5;  // 最差情况 × 1.5 安全裕量
+            ("latency updated: " ++ ~latency.round(0.001) ++ "s").postln;
+        };
+    });
+}, '/ping/reply');
+
+~pingRoutine = Routine({
+    loop {
+        ~bridge.sendMsg('/ping', Date.getDate.rawSeconds);
+        2.wait;
+    };
+}).play(SystemClock);
+
+// 停止 ping：
+// ~pingRoutine.stop;
+```
 
 ## 技术补充
 

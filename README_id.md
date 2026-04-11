@@ -137,7 +137,7 @@ Setup paling sederhana adalah `thisProcess.addOSCRecvFunc` yang menerima semua p
 
 Port penerima (`57120`) difilter secara eksplisit untuk menghindari konflik dengan aplikasi OSC lain yang berbagi instance sclang yang sama — misalnya SuperDirt mendaftarkan handler-nya sendiri dan dapat mengganggu jika tidak difilter. Port pengirim tidak difilter karena `local.py` menggunakan port UDP yang ditetapkan secara dinamis.
 
-`/ping` dikecualikan karena `local.py` mengirimkannya secara berkala sebagai keepalive untuk mempertahankan koneksi QUIC, dan tidak memiliki arti bagi scsynth.
+Pesan `/ping` ditangani oleh hub dan dikembalikan ke pengirim sebagai `/ping/reply` — tidak di-broadcast ke peserta lain. Handler relay berikut tidak perlu mengecualikan `/ping` secara eksplisit.
 
 ```supercollider
 // Store in a variable so it can be removed with thisProcess.removeOSCRecvFunc(~remoteFunc)
@@ -146,13 +146,11 @@ Port penerima (`57120`) difilter secara eksplisit untuk menghindari konflik deng
         if(msg[0].asString.beginsWith("/remote/"), {
             var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
             var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
-            if(cmd != '/ping', {
-                var delta = time - thisThread.seconds;
-                if(delta > 0, {
-                    s.sendBundle(delta, [cmd] ++ msg[1..]);
-                }, {
-                    s.sendMsg(cmd, *msg[1..]);
-                });
+            var delta = time - thisThread.seconds;
+            if(delta > 0, {
+                s.sendBundle(delta, [cmd] ++ msg[1..]);
+            }, {
+                s.sendMsg(cmd, *msg[1..]);
             });
         });
     });
@@ -178,13 +176,11 @@ Untuk menangani pesan dari pengirim atau perintah tertentu secara selektif, peri
             var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
             // example: log sender and command
             (senderName ++ " -> " ++ cmd).postln;
-            if(cmd != '/ping', {
-                var delta = time - thisThread.seconds;
-                if(delta > 0, {
-                    s.sendBundle(delta, [cmd] ++ msg[1..]);
-                }, {
-                    s.sendMsg(cmd, *msg[1..]);
-                });
+            var delta = time - thisThread.seconds;
+            if(delta > 0, {
+                s.sendBundle(delta, [cmd] ++ msg[1..]);
+            }, {
+                s.sendMsg(cmd, *msg[1..]);
             });
         });
     });
@@ -365,6 +361,40 @@ bridge.send_message("/n_free", [11000])
 ```
 
 > **Catatan:** `synthdef-bytes` disediakan oleh `overtone.sc.machinery.synthdef` dan melakukan serialisasi SynthDef ke format binary yang diharapkan scsynth.
+
+#### 5. Mengukur Latensi (/ping)
+
+Peserta mana pun dapat mengukur latensi round-trip dengan mengirim pesan `/ping` beserta timestamp. Hub mengembalikannya sebagai `/ping/reply` dengan semua argumen dipertahankan. Perlu diketahui bahwa `local.py` mengirim keepalive `/ping` tanpa argumen setiap 20 detik — filter dengan memeriksa `msg.size > 1`:
+
+```supercollider
+// Ukur latensi secara terus-menerus dan perbarui ~latency setiap 2 detik
+~pingTimes = Array.newClear(10);
+~pingIndex = 0;
+
+OSCdef(\pingReply, { |msg|
+    if(msg.size > 1, {  // abaikan keepalive ping (tanpa argumen timestamp)
+        var rtt = Date.getDate.rawSeconds - msg[1].asFloat;
+        var latency = rtt / 2;
+        ~pingTimes[~pingIndex % 10] = latency;
+        ~pingIndex = ~pingIndex + 1;
+        if(~pingIndex >= 10) {
+            var valid = ~pingTimes.select({ |v| v.notNil });
+            ~latency = valid.maxItem * 1.5;  // kasus terburuk × 1.5 margin keamanan
+            ("latency updated: " ++ ~latency.round(0.001) ++ "s").postln;
+        };
+    });
+}, '/ping/reply');
+
+~pingRoutine = Routine({
+    loop {
+        ~bridge.sendMsg('/ping', Date.getDate.rawSeconds);
+        2.wait;
+    };
+}).play(SystemClock);
+
+// Hentikan ping:
+// ~pingRoutine.stop;
+```
 
 ## Catatan Teknis
 

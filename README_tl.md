@@ -137,7 +137,7 @@ Ang pinakasimpleng setup ay `thisProcess.addOSCRecvFunc` na tumatanggap ng lahat
 
 Ang receive port (`57120`) ay tahasang nifi-filter upang maiwasan ang mga salungatan sa iba pang OSC application na nagbabahagi ng parehong sclang instance — halimbawa, ang SuperDirt ay nagrerehistro ng sarili nitong mga handler at maaaring makagambala kung hindi na-filter. Ang sender port ay hindi nifi-filter dahil gumagamit ang `local.py` ng dinamikong itinalagay na UDP port.
 
-Ang `/ping` ay hindi kasama dahil ang `local.py` ay nagpapadala nito nang pana-panahon bilang keepalive upang mapanatili ang koneksyon ng QUIC, at wala itong kahulugan para sa scsynth.
+Ang mga mensaheng `/ping` ay hinahawakan ng hub at ibinabalik sa nagpadala bilang `/ping/reply` — hindi ito ibino-broadcast sa ibang mga kalahok. Ang relay handler sa ibaba ay hindi na kailangang i-exclude ang `/ping` nang malinaw.
 
 ```supercollider
 // Store in a variable so it can be removed with thisProcess.removeOSCRecvFunc(~remoteFunc)
@@ -146,13 +146,11 @@ Ang `/ping` ay hindi kasama dahil ang `local.py` ay nagpapadala nito nang pana-p
         if(msg[0].asString.beginsWith("/remote/"), {
             var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
             var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
-            if(cmd != '/ping', {
-                var delta = time - thisThread.seconds;
-                if(delta > 0, {
-                    s.sendBundle(delta, [cmd] ++ msg[1..]);
-                }, {
-                    s.sendMsg(cmd, *msg[1..]);
-                });
+            var delta = time - thisThread.seconds;
+            if(delta > 0, {
+                s.sendBundle(delta, [cmd] ++ msg[1..]);
+            }, {
+                s.sendMsg(cmd, *msg[1..]);
             });
         });
     });
@@ -178,13 +176,11 @@ Para hawakan nang piling-pili ang mga mensahe mula sa isang partikular na nagpad
             var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
             // example: log sender and command
             (senderName ++ " -> " ++ cmd).postln;
-            if(cmd != '/ping', {
-                var delta = time - thisThread.seconds;
-                if(delta > 0, {
-                    s.sendBundle(delta, [cmd] ++ msg[1..]);
-                }, {
-                    s.sendMsg(cmd, *msg[1..]);
-                });
+            var delta = time - thisThread.seconds;
+            if(delta > 0, {
+                s.sendBundle(delta, [cmd] ++ msg[1..]);
+            }, {
+                s.sendMsg(cmd, *msg[1..]);
             });
         });
     });
@@ -365,6 +361,40 @@ bridge.send_message("/n_free", [11000])
 ```
 
 > **Tandaan:** Ang `synthdef-bytes` ay ibinibigay ng `overtone.sc.machinery.synthdef` at nagse-serialize ng SynthDef sa binary format na inaasahan ng scsynth.
+
+#### 5. Pagsukat ng Latency (/ping)
+
+Ang sinumang kalahok ay maaaring sukatin ang round-trip latency sa pamamagitan ng pagpapadala ng mensaheng `/ping` na may timestamp. Inuulit ito ng hub pabalik bilang `/ping/reply` na may lahat ng argument na napanatili. Tandaan na ang `local.py` ay nagpapadala ng no-argument `/ping` keepalive tuwing 20 segundo — i-filter sa pamamagitan ng pagsuri ng `msg.size > 1`:
+
+```supercollider
+// Patuloy na sukatin ang latency at i-update ang ~latency bawat 2 segundo
+~pingTimes = Array.newClear(10);
+~pingIndex = 0;
+
+OSCdef(\pingReply, { |msg|
+    if(msg.size > 1, {  // balewalain ang keepalive ping (walang timestamp arg)
+        var rtt = Date.getDate.rawSeconds - msg[1].asFloat;
+        var latency = rtt / 2;
+        ~pingTimes[~pingIndex % 10] = latency;
+        ~pingIndex = ~pingIndex + 1;
+        if(~pingIndex >= 10) {
+            var valid = ~pingTimes.select({ |v| v.notNil });
+            ~latency = valid.maxItem * 1.5;  // pinakamasamang kaso × 1.5 safety margin
+            ("latency updated: " ++ ~latency.round(0.001) ++ "s").postln;
+        };
+    });
+}, '/ping/reply');
+
+~pingRoutine = Routine({
+    loop {
+        ~bridge.sendMsg('/ping', Date.getDate.rawSeconds);
+        2.wait;
+    };
+}).play(SystemClock);
+
+// Ihinto ang pag-ping:
+// ~pingRoutine.stop;
+```
 
 ## Mga Teknikal na Tala
 

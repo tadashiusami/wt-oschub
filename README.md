@@ -137,7 +137,7 @@ The simplest setup is `thisProcess.addOSCRecvFunc` that receives all remote mess
 
 The receive port (`57120`) is explicitly filtered to avoid conflicts with other OSC applications sharing the same sclang instance — for example, SuperDirt registers its own handlers and may interfere if left unfiltered. The sender port is not filtered because `local.py` uses a dynamically assigned UDP port.
 
-`/ping` is excluded because `local.py` sends it periodically as a keepalive to maintain the QUIC connection, and it has no meaning for scsynth.
+`/ping` messages are intercepted by the hub and echoed back as `/ping/reply` — they are not broadcast to other participants. The relay handler below does not need to exclude `/ping` explicitly.
 
 ```supercollider
 // Store in a variable so it can be removed with thisProcess.removeOSCRecvFunc(~remoteFunc)
@@ -146,13 +146,11 @@ The receive port (`57120`) is explicitly filtered to avoid conflicts with other 
         if(msg[0].asString.beginsWith("/remote/"), {
             var parts = msg[0].asString.split($/).reject({|s| s.isEmpty});
             var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
-            if(cmd != '/ping', {
-                var delta = time - thisThread.seconds;
-                if(delta > 0, {
-                    s.sendBundle(delta, [cmd] ++ msg[1..]);
-                }, {
-                    s.sendMsg(cmd, *msg[1..]);
-                });
+            var delta = time - thisThread.seconds;
+            if(delta > 0, {
+                s.sendBundle(delta, [cmd] ++ msg[1..]);
+            }, {
+                s.sendMsg(cmd, *msg[1..]);
             });
         });
     });
@@ -178,13 +176,11 @@ To handle messages from a specific sender or command selectively, check `parts[1
             var cmd = ("/" ++ parts[2..].join("/")).asSymbol;
             // example: log sender and command
             (senderName ++ " -> " ++ cmd).postln;
-            if(cmd != '/ping', {
-                var delta = time - thisThread.seconds;
-                if(delta > 0, {
-                    s.sendBundle(delta, [cmd] ++ msg[1..]);
-                }, {
-                    s.sendMsg(cmd, *msg[1..]);
-                });
+            var delta = time - thisThread.seconds;
+            if(delta > 0, {
+                s.sendBundle(delta, [cmd] ++ msg[1..]);
+            }, {
+                s.sendMsg(cmd, *msg[1..]);
             });
         });
     });
@@ -365,6 +361,40 @@ bridge.send_message("/n_free", [11000])
 ```
 
 > **Note:** `synthdef-bytes` is provided by `overtone.sc.machinery.synthdef` and serializes the SynthDef into the binary format that scsynth expects.
+
+#### 5. Measuring Latency (/ping)
+
+Any participant can measure round-trip latency by sending a `/ping` message with a timestamp. The hub echoes it back as `/ping/reply` with all arguments preserved. Note that `local.py` also sends a no-argument `/ping` keepalive every 20 seconds — filter these by checking `msg.size > 1`:
+
+```supercollider
+// Continuously measure latency and update ~latency every 2 seconds
+~pingTimes = Array.newClear(10);
+~pingIndex = 0;
+
+OSCdef(\pingReply, { |msg|
+    if(msg.size > 1, {  // ignore keepalive pings (no timestamp arg)
+        var rtt = Date.getDate.rawSeconds - msg[1].asFloat;
+        var latency = rtt / 2;
+        ~pingTimes[~pingIndex % 10] = latency;
+        ~pingIndex = ~pingIndex + 1;
+        if(~pingIndex >= 10) {
+            var valid = ~pingTimes.select({ |v| v.notNil });
+            ~latency = valid.maxItem * 1.5;  // worst-case * 1.5 safety margin
+            ("latency updated: " ++ ~latency.round(0.001) ++ "s").postln;
+        };
+    });
+}, '/ping/reply');
+
+~pingRoutine = Routine({
+    loop {
+        ~bridge.sendMsg('/ping', Date.getDate.rawSeconds);
+        2.wait;
+    };
+}).play(SystemClock);
+
+// Stop pinging:
+// ~pingRoutine.stop;
+```
 
 ## Technical Notes
 
